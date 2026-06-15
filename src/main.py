@@ -40,6 +40,7 @@ from src.telemetry import (
 )
 from src.telemetry.logging import get_route_template
 from src.telemetry.sentry import initialize_sentry
+from src.dev_tools import setup_dev_tools
 
 if TYPE_CHECKING:
     from sentry_sdk._types import Event, Hint
@@ -128,6 +129,10 @@ if SENTRY_ENABLED:
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
+    # Initialize dev tools (Jaeger tracing, Loki logging, Vault secrets)
+    dev_tools = setup_dev_tools(service_name="honcho-api")
+    vault = dev_tools["vault"]
+    
     # Initialize CloudEvents telemetry
     await initialize_telemetry_async()
 
@@ -182,6 +187,10 @@ app = FastAPI(
         "url": "https://github.com/plastic-labs/honcho/blob/main/LICENSE",
     },
 )
+
+# Add dev tools middleware (tracing, logging)
+from src.dev_tools import add_dev_tools_middleware
+add_dev_tools_middleware(app)
 
 origins = [
     "http://localhost",

@@ -7,6 +7,7 @@ from prometheus_client import start_http_server
 
 from src.config import settings
 from src.db import engine, register_db_query_instrumentation
+from src.dev_tools import setup_dev_tools
 from src.startup import validate_embedding_schema
 from src.telemetry import (
     initialize_telemetry_async,
@@ -80,6 +81,7 @@ async def run_deriver():
 if __name__ == "__main__":
     # Setup logging before starting the main loop
     setup_logging()
+    setup_dev_tools(service_name="honcho-deriver")
     logger.info("Starting deriver queue processor")
 
     asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
