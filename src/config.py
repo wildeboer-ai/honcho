@@ -540,6 +540,7 @@ class TomlConfigSettingsSource(PydanticBaseSettingsSource):
         "VECTOR_STORE": "vector_store",
         "METRICS": "metrics",
         "TELEMETRY": "telemetry",
+        "DEV_TOOLS": "dev_tools",
         "": "app",  # For AppSettings with no prefix
     }
 
@@ -1128,6 +1129,32 @@ class TelemetrySettings(HonchoSettings):
     HIGH_VOLUME_SAMPLE_RATE: Annotated[float, Field(default=1.0, ge=0.0, le=1.0)] = 1.0
 
 
+class DevToolsSettings(HonchoSettings):
+    """Optional local observability integrations for development environments."""
+
+    model_config = SettingsConfigDict(env_prefix="DEV_TOOLS_", extra="ignore")  # pyright: ignore
+
+    ENABLED: bool = False
+    ENVIRONMENT: str = "development"
+
+    TRACING_ENABLED: bool = False
+    OTLP_TRACES_ENDPOINT: str = "http://localhost:4318/v1/traces"
+    INSTRUMENT_FASTAPI: bool = True
+    INSTRUMENT_SQLALCHEMY: bool = True
+    INSTRUMENT_REDIS: bool = True
+    INSTRUMENT_REQUESTS: bool = True
+    INSTRUMENT_HTTPX: bool = True
+
+    LOKI_ENABLED: bool = False
+    LOKI_URL: str = "http://localhost:3100"
+    LOKI_TAGS: dict[str, str] = Field(default_factory=dict)
+
+    VAULT_ENABLED: bool = False
+    VAULT_ADDR: str = "http://localhost:8200"
+    VAULT_TOKEN: str | None = None
+    VAULT_TOKEN_ENV: str = "VAULT_TOKEN"
+
+
 class CacheSettings(HonchoSettings):
     model_config = SettingsConfigDict(env_prefix="CACHE_", extra="ignore")  # pyright: ignore
 
@@ -1355,6 +1382,7 @@ class AppSettings(HonchoSettings):
     WEBHOOK: WebhookSettings = Field(default_factory=WebhookSettings)
     METRICS: MetricsSettings = Field(default_factory=MetricsSettings)
     TELEMETRY: TelemetrySettings = Field(default_factory=TelemetrySettings)
+    DEV_TOOLS: DevToolsSettings = Field(default_factory=DevToolsSettings)
     CACHE: CacheSettings = Field(default_factory=CacheSettings)
     DREAM: DreamSettings = Field(default_factory=DreamSettings)
     VECTOR_STORE: VectorStoreSettings = Field(default_factory=VectorStoreSettings)

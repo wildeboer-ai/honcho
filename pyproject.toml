@@ -41,6 +41,14 @@ dependencies = [
     "prometheus_client>=0.21.0",
     "cloudevents>=1.12.0,<2.0",
     "jinja2>=3.1.6",
+    "opentelemetry-instrumentation-fastapi>=0.62b1,<0.63",
+    "opentelemetry-instrumentation-sqlalchemy>=0.62b1,<0.63",
+    "opentelemetry-instrumentation-redis>=0.62b1,<0.63",
+    "opentelemetry-instrumentation-requests>=0.62b1,<0.63",
+    "opentelemetry-instrumentation-httpx>=0.62b1,<0.63",
+    "python-json-logger>=2.0.7",
+    "python-logging-loki>=0.3.1",
+    "hvac>=1.2.0",
 ]
 [dependency-groups]
 dev = [

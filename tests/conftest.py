@@ -81,6 +81,7 @@ _RUNTIME_MOCK_TEST_BLOCKLIST_PREFIXES = (
     "tests/utils/test_clients.py",
     "tests/utils/test_files.py",
     "tests/utils/test_templates.py",
+    "tests/test_dev_tools.py",
     "tests/test_generate_jwt_script.py",
     # Pure JWT scope tests — operate on src.security directly, no DB needed.
     "tests/test_security.py",
