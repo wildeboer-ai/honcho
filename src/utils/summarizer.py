@@ -225,6 +225,7 @@ async def create_short_summary(
         model_config=_get_summary_model_config(),
         prompt=prompt,
         max_tokens=settings.SUMMARY.MAX_TOKENS_SHORT,
+        trace_name="short_summary",
         telemetry=LLMTelemetryContext(
             workspace_name=workspace_name,
             call_purpose=CallPurpose.SUMMARY_SHORT.value,
@@ -257,6 +258,7 @@ async def create_long_summary(
         model_config=_get_summary_model_config(),
         prompt=prompt,
         max_tokens=settings.SUMMARY.MAX_TOKENS_LONG,
+        trace_name="long_summary",
         telemetry=LLMTelemetryContext(
             workspace_name=workspace_name,
             call_purpose=CallPurpose.SUMMARY_LONG.value,

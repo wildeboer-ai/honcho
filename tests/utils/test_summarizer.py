@@ -250,6 +250,7 @@ class TestSummaryCallerMigration:
         expected_config = settings.SUMMARY.MODEL_CONFIG
         assert "model_config" in kwargs
         assert kwargs["model_config"].model == expected_config.model
+        assert kwargs["trace_name"] == "short_summary"
         assert "llm_settings" not in kwargs
 
     async def test_create_long_summary_uses_model_config(self):
@@ -277,4 +278,5 @@ class TestSummaryCallerMigration:
         expected_config = settings.SUMMARY.MODEL_CONFIG
         assert "model_config" in kwargs
         assert kwargs["model_config"].model == expected_config.model
+        assert kwargs["trace_name"] == "long_summary"
         assert "llm_settings" not in kwargs
