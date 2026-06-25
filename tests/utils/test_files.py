@@ -1,12 +1,27 @@
+import asyncio
+import io
 import json
+import subprocess
+from pathlib import Path
+from types import TracebackType
 from typing import Any, ClassVar
+from unittest.mock import AsyncMock, patch
 
 import httpx
 import pytest
+from fastapi import UploadFile
+from starlette.datastructures import Headers
 
+import src.utils.files as file_utils
 from src.config import settings
-from src.exceptions import ValidationException
-from src.utils.files import JSONProcessor, PDFProcessor
+from src.exceptions import FileProcessingError, ValidationException
+from src.llm.audio import transcribe_audio
+from src.utils.files import (
+    AudioProcessor,
+    FileProcessingService,
+    JSONProcessor,
+    PDFProcessor,
+)
 
 
 class _FakeMistralOCRResponse:
@@ -80,6 +95,22 @@ class _FakePDFReader:
 
     def __exit__(self, *args: Any) -> None:
         return None
+
+
+class _FakeTranscriptions:
+    kwargs: dict[str, Any] | None = None
+
+    async def create(self, **kwargs: Any) -> str:
+        self.__class__.kwargs = kwargs
+        return " hello from whisper "
+
+
+class _FakeAudio:
+    transcriptions: _FakeTranscriptions = _FakeTranscriptions()
+
+
+class _FakeOpenAIClient:
+    audio: _FakeAudio = _FakeAudio()
 
 
 @pytest.mark.asyncio
@@ -177,3 +208,186 @@ async def test_pdf_processor_falls_back_to_pdfplumber_when_mistral_fails(
     result = await processor.extract_text(b"%PDF test bytes")
 
     assert result == "[Page 1]\nFirst page\n\n[Page 3]\nSecond page"
+
+
+def test_audio_processor_supports_mp3_and_wav_content_types():
+    processor = AudioProcessor()
+
+    assert processor.supports_file_type("audio/mpeg")
+    assert processor.supports_file_type("audio/wave")
+    assert processor.supports_file_type("audio/wav")
+    assert processor.supports_file_type("audio/x-wav")
+    assert not processor.supports_file_type("text/plain")
+
+
+def test_audio_defaults_use_openai_whisper():
+    assert settings.AUDIO.PROVIDER == "openai"
+    assert settings.AUDIO.MODEL == "whisper-1"
+
+
+def test_probe_audio_duration_cleans_up_temp_file_on_write_failure():
+    processor = AudioProcessor()
+
+    class FailingTempFile:
+        name: str = "/tmp/test-audio-probe.mp3"
+
+        def __enter__(self) -> "FailingTempFile":
+            return self
+
+        def __exit__(
+            self,
+            exc_type: type[BaseException] | None,
+            exc: BaseException | None,
+            tb: TracebackType | None,
+        ) -> bool:
+            return False
+
+        def write(self, _content: bytes) -> int:
+            raise OSError("disk full")
+
+    with (
+        patch("src.utils.files.tempfile.NamedTemporaryFile", return_value=FailingTempFile()),
+        patch("src.utils.files.Path.unlink") as mock_unlink,
+        pytest.raises(OSError, match="disk full"),
+    ):
+        processor._probe_audio_duration_seconds(b"audio-bytes", ".mp3")  # pyright: ignore[reportPrivateUsage]
+
+    mock_unlink.assert_called_once_with(missing_ok=True)
+
+
+def test_probe_audio_duration_timeout_raises_file_processing_error():
+    processor = AudioProcessor()
+
+    with (
+        patch("src.utils.files.sentry_sdk.capture_exception") as mock_capture,
+        patch(
+            "src.utils.files.subprocess.run",
+            side_effect=subprocess.TimeoutExpired(cmd="ffprobe", timeout=10),
+        ),
+        pytest.raises(FileProcessingError, match="Audio validation timed out"),
+    ):
+        processor.probe_audio_duration_seconds_from_path(Path("/tmp/audio.mp3"))
+
+    mock_capture.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_audio_upload_requires_openai_client_before_processing():
+    file = UploadFile(
+        file=io.BytesIO(b"audio-bytes"),
+        filename="voice.mp3",
+        headers=Headers({"content-type": "audio/mpeg"}),
+    )
+    service = FileProcessingService()
+
+    with (
+        patch.dict("src.utils.files.CLIENTS", {}, clear=True),
+        patch.object(service.audio_processor, "extract_text", new=AsyncMock()) as mock_extract,
+        pytest.raises(
+            ValidationException,
+            match="Audio uploads require OpenAI transcription credentials",
+        ),
+    ):
+        await service.extract_text_from_upload(file)
+
+    mock_extract.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_filename_audio_extension_does_not_override_explicit_text_plain_mime():
+    file = UploadFile(
+        file=io.BytesIO(b"plain text body"),
+        filename="notes.mp3",
+        headers=Headers({"content-type": "text/plain"}),
+    )
+    service = FileProcessingService()
+
+    with patch.object(service.audio_processor, "extract_text", new=AsyncMock()) as mock_extract:
+        extracted = await service.extract_text_from_upload(file)
+
+    assert extracted.text == "plain text body"
+    mock_extract.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_transcribe_audio_uses_openai_whisper():
+    _FakeTranscriptions.kwargs = None
+
+    with patch.dict("src.llm.audio.CLIENTS", {"openai": _FakeOpenAIClient()}, clear=True):
+        text = await transcribe_audio(
+            b"audio-bytes",
+            filename="clip.mp3",
+            content_type="audio/mpeg",
+        )
+
+    assert text == "hello from whisper"
+    assert _FakeTranscriptions.kwargs is not None
+    assert _FakeTranscriptions.kwargs["model"] == "whisper-1"
+    assert _FakeTranscriptions.kwargs["response_format"] == "text"
+
+
+@pytest.mark.asyncio
+async def test_audio_processor_extract_text_transcribes_directly():
+    processor = AudioProcessor()
+
+    async def fake_transcribe(
+        _content: bytes,
+        filename: str,
+        content_type: str,
+        **_: object,
+    ) -> str:
+        assert filename == "seg-0.mp3"
+        assert content_type == "audio/mpeg"
+        await asyncio.sleep(0.01)
+        return "first"
+
+    with (
+        patch.object(processor, "_probe_audio_duration_seconds", return_value=1.0),
+        patch("src.utils.files.transcribe_audio", side_effect=fake_transcribe),
+    ):
+        extracted = await processor.extract_text(
+            b"audio-bytes",
+            filename="seg-0.mp3",
+            content_type="audio/mpeg",
+        )
+
+    assert extracted.text == "first"
+    assert extracted.metadata["processing_type"] == "audio_transcription"
+    assert extracted.metadata["audio_segment_count"] == 1
+    assert extracted.metadata["transcription_provider"] == "openai"
+
+
+@pytest.mark.asyncio
+async def test_empty_audio_upload_is_rejected_before_transcription():
+    processor = AudioProcessor()
+
+    with (
+        patch("src.utils.files.transcribe_audio", new=AsyncMock()) as mock_transcribe,
+        pytest.raises(ValidationException, match="Audio upload is empty"),
+    ):
+        await processor.extract_text(
+            b"",
+            filename="empty.mp3",
+            content_type="audio/mpeg",
+        )
+
+    mock_transcribe.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_validated_audio_upload_returns_false_on_probe_timeout():
+    file = UploadFile(
+        file=io.BytesIO(b"audio-bytes"),
+        filename="voice.mp3",
+        headers=Headers({"content-type": "audio/mpeg"}),
+    )
+
+    with patch.object(
+        AudioProcessor,
+        "probe_audio_duration_seconds_from_path",
+        side_effect=FileProcessingError("Audio validation timed out"),
+    ):
+        is_valid = await file_utils.is_validated_audio_upload(file)
+
+    assert is_valid is False
+    assert file.file.tell() == 0

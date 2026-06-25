@@ -1,14 +1,20 @@
+import asyncio
 import base64
 import datetime
 import logging
+import subprocess
+import tempfile
 from collections.abc import Mapping
 from io import BytesIO
+from pathlib import Path
 from typing import Any, Protocol, cast
 
 import httpx
 import pdfplumber
+import sentry_sdk
 from fastapi import UploadFile
 from nanoid import generate as generate_nanoid
+from openai import APIError
 from sqlalchemy import Integer, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -19,13 +25,48 @@ from src.exceptions import (
     UnsupportedFileTypeError,
     ValidationException,
 )
+from src.llm import CLIENTS, transcribe_audio
 from src.schemas import Message
 
 logger = logging.getLogger(__name__)
 
+SUPPORTED_AUDIO_CONTENT_TYPES = {
+    "audio/mpeg",
+    "audio/mp3",
+    "audio/wave",
+    "audio/wav",
+    "audio/x-wav",
+}
+SUPPORTED_AUDIO_EXTENSIONS = {".mp3", ".wav"}
+AUDIO_EXTENSION_CONTENT_TYPES = {
+    ".mp3": "audio/mpeg",
+    ".wav": "audio/wav",
+}
+UPLOAD_VALIDATION_CHUNK_BYTES = 1024 * 1024
+AUDIO_PROBE_TIMEOUT_SECONDS = 10
+GENERIC_CONTENT_TYPES = {
+    "",
+    "application/octet-stream",
+}
+
+
+class ExtractedFileText(str):
+    metadata: dict[str, Any]
+
+    def __new__(
+        cls, text: str, metadata: dict[str, Any] | None = None
+    ) -> "ExtractedFileText":
+        obj = str.__new__(cls, text)
+        obj.metadata = metadata or {}
+        return obj
+
+    @property
+    def text(self) -> str:
+        return str(self)
+
 
 class FileProcessor(Protocol):
-    async def extract_text(self, content: bytes) -> str: ...
+    async def extract_text(self, content: bytes) -> ExtractedFileText: ...
     def supports_file_type(self, content_type: str) -> bool: ...
 
 
@@ -33,10 +74,10 @@ class PDFProcessor:
     def supports_file_type(self, content_type: str) -> bool:
         return content_type == "application/pdf"
 
-    async def extract_text(self, content: bytes) -> str:
+    async def extract_text(self, content: bytes) -> ExtractedFileText:
         if settings.MISTRAL_OCR_API_KEY:
-            return await self._extract_text_with_mistral_ocr(content)
-        return self._extract_text_with_pdfplumber(content)
+            return ExtractedFileText(await self._extract_text_with_mistral_ocr(content))
+        return ExtractedFileText(self._extract_text_with_pdfplumber(content))
 
     async def _extract_text_with_mistral_ocr(self, content: bytes) -> str:
         api_key = settings.MISTRAL_OCR_API_KEY
@@ -116,11 +157,11 @@ class TextProcessor:
     def supports_file_type(self, content_type: str) -> bool:
         return content_type.startswith("text/")
 
-    async def extract_text(self, content: bytes) -> str:
+    async def extract_text(self, content: bytes) -> ExtractedFileText:
         # Try different encodings
         for encoding in ["utf-8", "utf-16", "latin-1"]:
             try:
-                return content.decode(encoding)
+                return ExtractedFileText(content.decode(encoding))
             except UnicodeDecodeError:
                 continue
         raise ValueError("Could not decode text file")
@@ -130,7 +171,7 @@ class JSONProcessor:
     def supports_file_type(self, content_type: str) -> bool:
         return content_type == "application/json"
 
-    async def extract_text(self, content: bytes) -> str:
+    async def extract_text(self, content: bytes) -> ExtractedFileText:
         import json
 
         try:
@@ -139,7 +180,7 @@ class JSONProcessor:
             raise ValidationException("JSON uploads must be UTF-8 encoded") from exc
 
         if not decoded_content.strip():
-            return ""
+            return ExtractedFileText("")
 
         try:
             data = json.loads(decoded_content)
@@ -147,11 +188,180 @@ class JSONProcessor:
             raise ValidationException("Uploaded JSON is invalid") from exc
 
         # Convert JSON to readable text format
-        return json.dumps(data, ensure_ascii=False)
+        return ExtractedFileText(json.dumps(data, ensure_ascii=False))
+
+
+class AudioProcessor:
+    def supports_file_type(self, content_type: str) -> bool:
+        return content_type in SUPPORTED_AUDIO_CONTENT_TYPES
+
+    def supports_filename(self, filename: str | None) -> bool:
+        if not filename:
+            return False
+        return Path(filename).suffix.lower() in SUPPORTED_AUDIO_EXTENSIONS
+
+    def supports_content(self, *, filename: str | None, content_type: str) -> bool:
+        if self.supports_file_type(content_type):
+            return True
+        if content_type not in GENERIC_CONTENT_TYPES:
+            return False
+        return self.supports_filename(filename)
+
+    def supports_upload(self, file: UploadFile) -> bool:
+        return self.supports_content(
+            filename=file.filename,
+            content_type=file.content_type or "",
+        )
+
+    async def extract_text(
+        self,
+        content: bytes,
+        *,
+        filename: str | None,
+        content_type: str,
+    ) -> ExtractedFileText:
+        if not filename:
+            raise ValidationException("Audio upload requires a filename")
+        if not content:
+            raise ValidationException("Audio upload is empty")
+
+        suffix = self.get_output_suffix(filename, content_type)
+        normalized_filename = self.ensure_audio_filename(filename, suffix)
+        normalized_content_type = self.normalize_content_type(filename, content_type)
+        await asyncio.to_thread(
+            self._probe_audio_duration_seconds,
+            content,
+            suffix,
+        )
+        try:
+            text = await transcribe_audio(
+                content,
+                filename=normalized_filename,
+                content_type=normalized_content_type,
+            )
+        except APIError as exc:
+            sentry_sdk.capture_exception(exc)
+            raise FileProcessingError("Audio transcription failed") from exc
+        return ExtractedFileText(
+            text=text,
+            metadata={
+                "processing_type": "audio_transcription",
+                "audio_segment_count": 1,
+                "transcription_provider": settings.AUDIO.PROVIDER,
+            },
+        )
+
+    def normalize_content_type(self, filename: str, content_type: str) -> str:
+        if content_type in SUPPORTED_AUDIO_CONTENT_TYPES:
+            return content_type
+        extension = Path(filename).suffix.lower()
+        return AUDIO_EXTENSION_CONTENT_TYPES.get(extension, content_type)
+
+    def get_output_suffix(self, filename: str, content_type: str) -> str:
+        suffix = Path(filename).suffix.lower()
+        if suffix in SUPPORTED_AUDIO_EXTENSIONS:
+            return suffix
+        if content_type in {"audio/wave", "audio/wav", "audio/x-wav"}:
+            return ".wav"
+        return ".mp3"
+
+    def ensure_audio_filename(self, filename: str, suffix: str) -> str:
+        path = Path(filename)
+        if path.suffix.lower() == suffix:
+            return filename
+        return f"{filename}{suffix}"
+
+    def _probe_audio_duration_seconds(self, content: bytes, suffix: str) -> float:
+        temp_path: Path | None = None
+        try:
+            with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as temp_file:
+                temp_path = Path(temp_file.name)
+                temp_file.write(content)
+            return self.probe_audio_duration_seconds_from_path(temp_path)
+        finally:
+            if temp_path is not None:
+                temp_path.unlink(missing_ok=True)
+
+    def probe_audio_duration_seconds_from_path(self, path: Path) -> float:
+        try:
+            command = [
+                "ffprobe",
+                "-v",
+                "error",
+                "-show_entries",
+                "format=duration",
+                "-of",
+                "default=noprint_wrappers=1:nokey=1",
+                str(path),
+            ]
+            result = subprocess.run(
+                command,
+                capture_output=True,
+                text=True,
+                check=True,
+                timeout=AUDIO_PROBE_TIMEOUT_SECONDS,
+            )
+            return max(float(result.stdout.strip()), 0.0)
+        except FileNotFoundError as exc:
+            raise ValidationException(
+                "Audio uploads require ffmpeg and ffprobe to be installed on the server"
+            ) from exc
+        except subprocess.TimeoutExpired as exc:
+            sentry_sdk.capture_exception(exc)
+            raise FileProcessingError("Audio validation timed out") from exc
+        except (subprocess.CalledProcessError, ValueError) as exc:
+            raise ValidationException("Uploaded audio is invalid or unreadable") from exc
+
+
+def is_audio_upload(file: UploadFile) -> bool:
+    return AudioProcessor().supports_upload(file)
+
+
+def is_audio_transcription_enabled() -> bool:
+    return settings.AUDIO.PROVIDER == "openai" and "openai" in CLIENTS
+
+
+async def is_validated_audio_upload(file: UploadFile) -> bool:
+    processor = AudioProcessor()
+    if not processor.supports_upload(file):
+        return False
+
+    filename = file.filename
+    if not filename:
+        return False
+
+    content_type = processor.normalize_content_type(filename, file.content_type or "")
+    suffix = processor.get_output_suffix(filename, content_type)
+    temp_path: Path | None = None
+
+    try:
+        with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as temp_file:
+            temp_path = Path(temp_file.name)
+            while chunk := await file.read(UPLOAD_VALIDATION_CHUNK_BYTES):
+                temp_file.write(chunk)
+
+        await asyncio.to_thread(
+            processor.probe_audio_duration_seconds_from_path,
+            temp_path,
+        )
+        return True
+    except ValidationException as exc:
+        if str(exc) == "Uploaded audio is invalid or unreadable":
+            return False
+        raise
+    except FileProcessingError as exc:
+        if exc.detail == "Audio validation timed out":
+            return False
+        raise
+    finally:
+        await file.seek(0)
+        if temp_path is not None:
+            temp_path.unlink(missing_ok=True)
 
 
 class FileProcessingService:
     def __init__(self):
+        self.audio_processor: AudioProcessor = AudioProcessor()
         self.processors: list[FileProcessor] = [
             PDFProcessor(),
             TextProcessor(),
@@ -159,14 +369,29 @@ class FileProcessingService:
             # Add more processors as needed
         ]
 
-    async def extract_text_from_upload(self, file: UploadFile) -> str:
+    async def extract_text_from_upload(self, file: UploadFile) -> ExtractedFileText:
         """Extract text from uploaded file without saving to disk."""
         content = await file.read()
 
         # Reset file position in case it's needed again
         await file.seek(0)
+        normalized_content_type = file.content_type or ""
 
-        processor = self._get_processor(file.content_type or "")
+        if self.audio_processor.supports_content(
+            filename=file.filename,
+            content_type=normalized_content_type,
+        ):
+            if "openai" not in CLIENTS:
+                raise ValidationException(
+                    "Audio uploads require OpenAI transcription credentials"
+                )
+            return await self.audio_processor.extract_text(
+                content,
+                filename=file.filename,
+                content_type=normalized_content_type,
+            )
+
+        processor = self._get_processor(normalized_content_type)
         if not processor:
             raise UnsupportedFileTypeError(
                 f"Unsupported file type: {file.content_type}. Supported types: {[p.__class__.__name__ for p in self.processors]}"
@@ -309,6 +534,7 @@ async def process_file_uploads_for_messages(
                 min((i + 1) * max_chars, len(extracted_text)),
             ],
         }
+        file_metadata.update(extracted_text.metadata)
 
         all_message_data.append(
             {

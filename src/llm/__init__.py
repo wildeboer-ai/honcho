@@ -8,6 +8,7 @@ is gone; everything lives here now.
 from __future__ import annotations
 
 from .api import honcho_llm_call
+from .audio import transcribe_audio
 from .backend import CompletionResult, ProviderBackend, StreamChunk, ToolCallResult
 from .credentials import default_transport_api_key, resolve_credentials
 from .executor import honcho_llm_call_inner
@@ -63,4 +64,5 @@ __all__ = [
     "honcho_llm_call",
     "honcho_llm_call_inner",
     "resolve_credentials",
+    "transcribe_audio",
 ]
