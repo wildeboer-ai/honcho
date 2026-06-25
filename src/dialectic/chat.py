@@ -52,6 +52,7 @@ async def agentic_chat(
             )
         workspace = await crud.get_workspace(db, workspace_name=workspace_name)
         configuration = get_configuration(None, session, workspace)
+        agent_config = await crud.get_workspace_agent_config(db, workspace_name)
 
         observer_peer_card = None
         observed_peer_card = None
@@ -73,6 +74,7 @@ async def agentic_chat(
         observer_peer_card=observer_peer_card,
         observed_peer_card=observed_peer_card,
         reasoning_level=reasoning_level,
+        custom_rules=agent_config.dialectic_rules,
     )
 
     return await agent.answer(query)
@@ -113,6 +115,7 @@ async def agentic_chat_stream(
             )
         workspace = await crud.get_workspace(db, workspace_name=workspace_name)
         configuration = get_configuration(None, session, workspace)
+        agent_config = await crud.get_workspace_agent_config(db, workspace_name)
 
         observer_peer_card = None
         observed_peer_card = None
@@ -134,6 +137,7 @@ async def agentic_chat_stream(
         observer_peer_card=observer_peer_card,
         observed_peer_card=observed_peer_card,
         reasoning_level=reasoning_level,
+        custom_rules=agent_config.dialectic_rules,
     )
 
     async for chunk in agent.answer_stream(query):

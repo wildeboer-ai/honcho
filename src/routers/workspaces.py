@@ -16,7 +16,9 @@ from src.config import settings
 from src.dependencies import db, read_db, tracked_db
 from src.deriver.enqueue import enqueue_deletion, enqueue_dream
 from src.dialectic.chat import workspace_chat, workspace_chat_stream
+from src.dreamer.introspection import get_latest_introspection_report
 from src.exceptions import AuthenticationException
+from src.feedback import process_feedback
 from src.security import JWTParams, require_auth
 from src.telemetry import prometheus_metrics
 from src.utils.search import search
@@ -101,6 +103,17 @@ async def update_workspace(
     db: AsyncSession = db,
 ):
     """Update Workspace metadata and/or configuration."""
+    if workspace.metadata and "_agent_config" in workspace.metadata:
+        try:
+            schemas.WorkspaceAgentConfig.model_validate(
+                workspace.metadata["_agent_config"]
+            )
+        except Exception as e:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid _agent_config in metadata: {e}",
+            ) from e
+
     # ResourceNotFoundException will be caught by global handler if workspace not found
     honcho_workspace = await crud.update_workspace(
         db, workspace_name=workspace_id, workspace=workspace
@@ -395,3 +408,37 @@ async def schedule_dream(
         observed,
         request.session_id,
     )
+
+
+@router.post(
+    "/{workspace_id}/feedback",
+    response_model=schemas.FeedbackResponse,
+    dependencies=[Depends(require_auth(workspace_name="workspace_id"))],
+)
+async def process_developer_feedback(
+    workspace_id: str = Path(...),
+    request: schemas.FeedbackRequest = Body(...),
+    db: AsyncSession = db,
+):
+    """Process developer feedback and update workspace agent configuration."""
+    introspection_report = None
+    if request.include_introspection:
+        introspection_report = await get_latest_introspection_report(db, workspace_id)
+
+    return await process_feedback(db, workspace_id, request, introspection_report)
+
+
+@router.get(
+    "/{workspace_id}/introspection",
+    response_model=schemas.IntrospectionReport,
+    dependencies=[Depends(require_auth(workspace_name="workspace_id"))],
+)
+async def get_introspection_report(
+    workspace_id: str = Path(...),
+    db: AsyncSession = db,
+):
+    """Get the latest introspection report for a workspace."""
+    report = await get_latest_introspection_report(db, workspace_id)
+    if report is None:
+        raise HTTPException(status_code=404, detail="No introspection report found")
+    return report

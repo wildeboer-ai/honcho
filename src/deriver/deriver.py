@@ -1,7 +1,7 @@
 import logging
 import time
 
-from src import crud
+from src import crud, schemas
 from src.config import ConfiguredModelSettings, settings
 from src.crud.representation import RepresentationManager
 from src.dependencies import tracked_db
@@ -31,6 +31,19 @@ logger = logging.getLogger(__name__)
 
 def _get_deriver_model_config() -> ConfiguredModelSettings:
     return settings.DERIVER.MODEL_CONFIG
+
+
+def _combine_custom_instructions(*parts: object) -> str | None:
+    normalized: list[str] = []
+    for part in parts:
+        if not isinstance(part, str):
+            continue
+        stripped = part.strip()
+        if stripped:
+            normalized.append(stripped)
+    if not normalized:
+        return None
+    return "\n\n".join(normalized)
 
 
 @with_sentry_transaction("minimal_deriver_batch", op="deriver")
@@ -86,7 +99,22 @@ async def process_representation_tasks_batch(
     if message_level_configuration.reasoning.enabled is False:
         return
 
-    custom_instructions = message_level_configuration.reasoning.custom_instructions
+    try:
+        async with tracked_db("minimal_deriver.get_agent_config", read_only=True) as db:
+            agent_config = await crud.get_workspace_agent_config(
+                db, latest_message.workspace_name
+            )
+    except Exception as e:
+        logger.warning(
+            "Failed to load workspace agent config for deriver; using defaults: %s",
+            e,
+        )
+        agent_config = schemas.WorkspaceAgentConfig()
+
+    custom_instructions = _combine_custom_instructions(
+        message_level_configuration.reasoning.custom_instructions,
+        agent_config.deriver_rules,
+    )
 
     accumulate_metric(
         f"minimal_deriver_{latest_message.id}_{observed}",
