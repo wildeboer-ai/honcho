@@ -119,4 +119,3 @@ We don't currently automate replay (deferred until we've done a fix-eval compari
 5. Run the same fixture. Diff the new artifacts against the originals.
 
 When `honcho_git_dirty: true` in metadata, the run included uncommitted changes — replay requires either committing them (so the SHA covers them) or recreating the working-tree state from saved patches.
-
