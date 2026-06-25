@@ -17,6 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src import crud, models
 from src.config import settings
+from src.exceptions import ResourceNotFoundException
 from src.llm import honcho_llm_call
 from src.schemas import (
     IntrospectionReport,
@@ -415,7 +416,7 @@ async def store_introspection_report(
 
     try:
         # Ensure system peers exist
-        await crud.get_or_create_peers(
+        peer_result = await crud.get_or_create_peers(
             db,
             workspace_name,
             [
@@ -423,14 +424,28 @@ async def store_introspection_report(
                 schemas.PeerCreate(name=INTROSPECTION_OBSERVED),
             ],
         )
+        await db.flush()
 
-        # Ensure collection exists
-        await crud.get_or_create_collection(
-            db,
-            workspace_name,
-            observer=SYSTEM_OBSERVER,
-            observed=INTROSPECTION_OBSERVED,
-        )
+        # Ensure collection exists with a direct DB lookup. This write path needs
+        # the collection row to be present in the current transaction for the
+        # document foreign key insert below.
+        try:
+            await crud.get_collection(
+                db,
+                workspace_name,
+                observer=SYSTEM_OBSERVER,
+                observed=INTROSPECTION_OBSERVED,
+                with_for_update=True,
+            )
+        except ResourceNotFoundException:
+            db.add(
+                models.Collection(
+                    workspace_name=workspace_name,
+                    observer=SYSTEM_OBSERVER,
+                    observed=INTROSPECTION_OBSERVED,
+                )
+            )
+            await db.flush()
 
         # Serialize report to JSON
         report_json = report.model_dump_json()
@@ -454,6 +469,7 @@ async def store_introspection_report(
 
         db.add(doc)
         await db.commit()
+        await peer_result.post_commit()
 
         logger.debug(
             f"Stored introspection report for {workspace_name}, doc_id={doc.id}"
