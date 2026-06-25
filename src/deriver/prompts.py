@@ -25,6 +25,7 @@ def minimal_deriver_prompt(
     peer_id: str,
     messages: str,
     custom_instructions: str | None = None,
+    custom_rules: str | None = None,
 ) -> str:
     """
     Generate minimal prompt for fast observation extraction.
@@ -36,6 +37,9 @@ def minimal_deriver_prompt(
     Returns:
         Formatted prompt string for observation extraction.
     """
+    if custom_instructions is None:
+        custom_instructions = custom_rules
+
     return render_template(
         settings.DERIVER.PROMPT_TEMPLATE,
         {

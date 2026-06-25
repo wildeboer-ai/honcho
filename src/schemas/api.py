@@ -6,7 +6,7 @@ API contract.
 
 import datetime
 import ipaddress
-from typing import Annotated, Any, Self, cast
+from typing import Annotated, Any, Literal, Self, cast
 from urllib.parse import urlparse
 
 import tiktoken
@@ -85,6 +85,90 @@ def _validate_metadata(v: Any) -> Any:
 
 
 _SanitizedMetadata = Annotated[dict[str, Any], BeforeValidator(_validate_metadata)]
+
+# ---------------------------------------------------------------------------
+# Agent configuration and introspection schemas
+# ---------------------------------------------------------------------------
+
+
+class WorkspaceAgentConfig(BaseModel):
+    """Per-workspace prompt customization stored in metadata["_agent_config"]."""
+
+    deriver_rules: str = Field(
+        default="",
+        description="Custom rules injected into the deriver prompt.",
+    )
+    dialectic_rules: str = Field(
+        default="",
+        description="Custom rules injected into the dialectic prompt.",
+    )
+
+
+class IntrospectionSignals(BaseModel):
+    """Signals gathered for workspace introspection analysis."""
+
+    total_dialectic_queries: int = 0
+    avg_dialectic_duration_ms: float = 0.0
+    abstention_count: int = 0
+    abstention_rate: float = 0.0
+    recent_queries: list[str] = Field(default_factory=list)
+    total_observations: int = 0
+    observations_by_level: dict[str, int] = Field(default_factory=dict)
+    contradiction_count: int = 0
+    total_peers: int = 0
+    total_sessions: int = 0
+    current_deriver_rules: str = ""
+    current_dialectic_rules: str = ""
+
+
+class IntrospectionSuggestion(BaseModel):
+    """A suggested workspace agent configuration change."""
+
+    target: Literal["deriver_rules", "dialectic_rules"]
+    current_value: str
+    suggested_value: str
+    rationale: str
+    confidence: Literal["high", "medium", "low"]
+
+
+class IntrospectionReport(BaseModel):
+    """Workspace introspection report and suggested configuration changes."""
+
+    workspace_name: str
+    generated_at: datetime.datetime
+    performance_summary: str
+    identified_issues: list[str] = Field(default_factory=list)
+    suggestions: list[IntrospectionSuggestion] = Field(default_factory=list)
+    signals: IntrospectionSignals
+
+
+class FeedbackRequest(BaseModel):
+    """Natural-language request to the developer feedback channel."""
+
+    message: str = Field(..., min_length=1, max_length=10000)
+    include_introspection: bool = Field(default=False)
+
+    @field_validator("message", mode="after")
+    @classmethod
+    def sanitize_message(cls, v: str) -> str:
+        return v.replace("\x00", "")
+
+
+class ConfigChange(BaseModel):
+    """A workspace agent configuration change made by feedback processing."""
+
+    field: Literal["deriver_rules", "dialectic_rules"]
+    previous_value: str
+    new_value: str
+
+
+class FeedbackResponse(BaseModel):
+    """Response from the developer feedback channel."""
+
+    message: str
+    understood_intent: str
+    changes_made: list[ConfigChange] = Field(default_factory=list)
+    current_config: WorkspaceAgentConfig
 
 # ---------------------------------------------------------------------------
 # Workspace schemas
@@ -806,3 +890,20 @@ class WebhookEndpoint(WebhookEndpointBase):
     created_at: datetime.datetime
 
     model_config = ConfigDict(from_attributes=True, populate_by_name=True)  # pyright: ignore
+
+
+class DialecticTraceCreate(BaseModel):
+    """Internal schema for creating DialecticTrace records."""
+
+    workspace_name: str
+    session_name: str | None = None
+    observer: str
+    observed: str
+    query: str
+    retrieved_doc_ids: list[str] = Field(default_factory=list)
+    tool_calls: list[dict[str, Any]] = Field(default_factory=list)
+    response: str
+    reasoning_level: str
+    total_duration_ms: float
+    input_tokens: int
+    output_tokens: int

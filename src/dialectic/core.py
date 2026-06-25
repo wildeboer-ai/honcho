@@ -7,6 +7,7 @@ and synthesize responses to queries about a peer.
 
 import json
 import logging
+import re
 import time
 from collections.abc import AsyncIterator, Callable
 from typing import Any, cast
@@ -24,6 +25,7 @@ from src.llm import (
     honcho_llm_call,
 )
 from src.llm.types import LLMTelemetryContext
+from src.schemas import DialecticTraceCreate
 from src.telemetry import prometheus_metrics
 from src.telemetry.events import (
     DialecticCompletedEvent,
@@ -47,6 +49,23 @@ from src.utils.formatting import format_new_turn_with_timestamp
 from src.utils.types import embedding_call_purpose
 
 logger = logging.getLogger(__name__)
+
+_DOC_ID_PATTERN = re.compile(r"\[id:([a-zA-Z0-9_-]+)\]")
+
+
+def extract_doc_ids_from_messages(messages: list[dict[str, Any]]) -> list[str]:
+    """Extract unique observation/document IDs from tool-result message content."""
+    doc_ids: list[str] = []
+    seen: set[str] = set()
+    for message in messages:
+        content = message.get("content")
+        if not isinstance(content, str):
+            continue
+        for doc_id in _DOC_ID_PATTERN.findall(content):
+            if doc_id not in seen:
+                seen.add(doc_id)
+                doc_ids.append(doc_id)
+    return doc_ids
 
 
 def _get_dialectic_level_model_config(
@@ -99,6 +118,7 @@ class DialecticAgent:
         observed_peer_card: list[str] | None = None,
         metric_key: str | None = None,
         reasoning_level: ReasoningLevel = "low",
+        custom_rules: str = "",
     ):
         """
         Initialize the dialectic agent.
@@ -127,7 +147,11 @@ class DialecticAgent:
             {
                 "role": "system",
                 "content": prompts.agent_system_prompt(
-                    observer, observed, observer_peer_card, observed_peer_card
+                    observer,
+                    observed,
+                    observer_peer_card,
+                    observed_peer_card,
+                    custom_rules=custom_rules,
                 ),
             }
         ]
@@ -540,7 +564,41 @@ class DialecticAgent:
             hit_input_token_cap=response.hit_input_token_cap,
         )
 
-    def _log_response_metrics(
+    async def _persist_dialectic_trace(
+        self,
+        *,
+        query: str,
+        response_content: str,
+        input_tokens: int,
+        output_tokens: int,
+        tool_calls_made: list[dict[str, Any]],
+        total_duration_ms: float,
+        trace_messages: list[dict[str, Any]] | None = None,
+    ) -> None:
+        trace = DialecticTraceCreate(
+            workspace_name=self.workspace_name,
+            session_name=self.session_name,
+            observer=self.observer,
+            observed=self.observed,
+            query=query,
+            retrieved_doc_ids=extract_doc_ids_from_messages(
+                trace_messages or self.messages
+            ),
+            tool_calls=tool_calls_made,
+            response=response_content,
+            reasoning_level=self.reasoning_level,
+            total_duration_ms=total_duration_ms,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+        )
+        try:
+            async with tracked_db("dialectic.trace") as db:
+                await crud.create_dialectic_trace(db, trace)
+                await db.commit()
+        except Exception as e:
+            logger.warning("Failed to persist dialectic trace: %s", e)
+
+    async def _log_response_metrics(
         self,
         task_name: str,
         run_id: str | None,
@@ -556,6 +614,9 @@ class DialecticAgent:
         hit_input_token_cap: bool = False,
         two_phase_mode: bool = False,
         phases: list[DialecticPhaseMetrics] | None = None,
+        query: str | None = None,
+        tool_calls_made: list[dict[str, Any]] | None = None,
+        trace_messages: list[dict[str, Any]] | None = None,
     ) -> None:
         """
         Log metrics common to both streaming and non-streaming responses.
@@ -630,6 +691,17 @@ class DialecticAgent:
             )
         )
 
+        if query is not None:
+            await self._persist_dialectic_trace(
+                query=query,
+                response_content=response_content,
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                tool_calls_made=tool_calls_made or [],
+                total_duration_ms=elapsed_ms,
+                trace_messages=trace_messages,
+            )
+
     async def answer(self, query: str) -> str:
         """
         Answer a query about the peer using agentic tool calling.
@@ -699,7 +771,7 @@ class DialecticAgent:
                     tool_calls_count=0,
                 ),
             ]
-            self._log_response_metrics(
+            await self._log_response_metrics(
                 task_name=task_name,
                 run_id=run_id,
                 start_time=start_time,
@@ -725,6 +797,9 @@ class DialecticAgent:
                 ),
                 two_phase_mode=True,
                 phases=phases,
+                query=query,
+                tool_calls_made=search_response.tool_calls_made,
+                trace_messages=search_response.messages or self.messages,
             )
             return synthesis_response.content
 
@@ -745,7 +820,7 @@ class DialecticAgent:
             telemetry=self._telemetry_context(),
         )
 
-        self._log_response_metrics(
+        await self._log_response_metrics(
             task_name=task_name,
             run_id=run_id,
             start_time=start_time,
@@ -758,6 +833,9 @@ class DialecticAgent:
             thinking_content=response.thinking_content,
             iterations=response.iterations,
             hit_input_token_cap=response.hit_input_token_cap,
+            query=query,
+            tool_calls_made=response.tool_calls_made,
+            trace_messages=response.messages or self.messages,
         )
 
         return response.content
@@ -831,7 +909,7 @@ class DialecticAgent:
                     tool_calls_count=0,
                 ),
             ]
-            self._log_response_metrics(
+            await self._log_response_metrics(
                 task_name=task_name,
                 run_id=run_id,
                 start_time=start_time,
@@ -857,6 +935,9 @@ class DialecticAgent:
                 ),
                 two_phase_mode=True,
                 phases=phases,
+                query=query,
+                tool_calls_made=search_response.tool_calls_made,
+                trace_messages=search_response.messages or self.messages,
             )
             if synthesis_response.content:
                 yield synthesis_response.content
@@ -890,7 +971,7 @@ class DialecticAgent:
                 accumulated_content.append(chunk.content)
                 yield chunk.content
 
-        self._log_response_metrics(
+        await self._log_response_metrics(
             task_name=task_name,
             run_id=run_id,
             start_time=start_time,
@@ -903,4 +984,6 @@ class DialecticAgent:
             thinking_content=response.thinking_content,
             iterations=response.iterations,
             hit_input_token_cap=response.hit_input_token_cap,
+            query=query,
+            tool_calls_made=response.tool_calls_made,
         )

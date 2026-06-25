@@ -14,17 +14,17 @@ RULES:
 - Extract ALL observations from the target peer's messages, using others as context.
 - Contextualize each observation sufficiently (e.g. "Ann is nervous about the job interview at the pharmacy" not just "Ann is nervous")
 
+{% if custom_instructions %}
+ADDITIONAL RULES (workspace-specific):
+These instructions apply to the target peer identified below.
+{{ custom_instructions }}
+
+{% endif %}
 EXAMPLES (using `alice` as the target peer id):
 - EXPLICIT: "I just had my 25th birthday last Saturday" -> "alice is 25 years old", "alice's birthday is June 21st"
 - EXPLICIT: "I took my dog for a walk in NYC" -> "alice has a dog", "alice lives in NYC"
 - EXPLICIT: "alice attended college" + general knowledge -> "alice completed high school or equivalent"
 
-{% if custom_instructions %}
-CUSTOM INSTRUCTIONS:
-These instructions apply to the target peer identified below.
-{{ custom_instructions }}
-
-{% endif %}
 Target peer:
 {{ peer_id }}
 

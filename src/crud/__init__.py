@@ -9,6 +9,11 @@ from .deriver import (
     get_queue_status,
     get_queue_work_units_query,
 )
+from .dialectic_trace import (
+    create_dialectic_trace,
+    get_dialectic_trace_stats,
+    get_dialectic_traces,
+)
 from .document import (
     create_documents,
     create_observations,
@@ -79,7 +84,9 @@ from .workspace import (
     get_all_workspaces,
     get_or_create_workspace,
     get_workspace,
+    get_workspace_agent_config,
     get_workspace_stats,
+    set_workspace_agent_config,
     update_workspace,
 )
 
@@ -93,6 +100,10 @@ __all__ = [
     "get_deriver_status",
     "get_queue_status",
     "get_queue_work_units_query",
+    # Dialectic trace
+    "create_dialectic_trace",
+    "get_dialectic_trace_stats",
+    "get_dialectic_traces",
     # Document
     "create_documents",
     "create_observations",
@@ -158,7 +169,9 @@ __all__ = [
     "get_active_peers",
     "get_or_create_workspace",
     "get_workspace",
+    "get_workspace_agent_config",
     "get_workspace_stats",
+    "set_workspace_agent_config",
     "get_all_workspaces",
     "update_workspace",
 ]

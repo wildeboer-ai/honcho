@@ -401,6 +401,18 @@ DREAM: {payload.dream_type} documents for {workspace_name}/{payload.observer}/{p
                             update_data={"dream": dream_meta},
                         )
 
+            case DreamType.INTROSPECTION:
+                from src.dreamer.introspection import run_introspection
+
+                async with tracked_db("introspection") as db:
+                    result = await run_introspection(db, workspace_name)
+
+                if result is not None:
+                    logger.info(
+                        "Introspection completed: %s suggestions",
+                        len(result.suggestions),
+                    )
+
     except Exception as e:
         logger.error(
             f"Error processing dream task {payload.dream_type} for {payload.observer}/{payload.observed}: {str(e)}",

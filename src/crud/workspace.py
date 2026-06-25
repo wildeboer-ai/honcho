@@ -24,6 +24,8 @@ from src.utils.filter import apply_filter
 from src.utils.types import GetOrCreateResult
 from src.vector_store import get_external_vector_store
 
+AGENT_CONFIG_KEY = "_agent_config"
+
 logger = getLogger(__name__)
 
 
@@ -649,3 +651,31 @@ async def get_active_peers(
         )
         for row in rows
     ]
+
+
+async def get_workspace_agent_config(
+    db: AsyncSession,
+    workspace_name: str,
+) -> schemas.WorkspaceAgentConfig:
+    """Return workspace agent config, or defaults when none is configured."""
+    workspace = await get_workspace(db, workspace_name)
+    metadata = workspace.h_metadata or {}
+    agent_config_data = metadata.get(AGENT_CONFIG_KEY, {})
+    return schemas.WorkspaceAgentConfig.model_validate(agent_config_data)
+
+
+async def set_workspace_agent_config(
+    db: AsyncSession,
+    workspace_name: str,
+    config: schemas.WorkspaceAgentConfig,
+) -> models.Workspace:
+    """Persist workspace agent config inside workspace metadata."""
+    workspace = await get_workspace(db, workspace_name)
+    new_metadata = dict(workspace.h_metadata or {})
+    new_metadata[AGENT_CONFIG_KEY] = config.model_dump()
+
+    return await update_workspace(
+        db,
+        workspace_name,
+        schemas.WorkspaceUpdate(metadata=new_metadata),
+    )

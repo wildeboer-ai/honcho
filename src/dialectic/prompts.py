@@ -11,6 +11,7 @@ def agent_system_prompt(
     observed: str,
     observer_peer_card: list[str] | None,
     observed_peer_card: list[str] | None,
+    custom_rules: str = "",
 ) -> str:
     """
     Generate the agent system prompt for the dialectic agent.
@@ -82,13 +83,21 @@ Peer cards are **constructed summaries** - they are synthesized from the same ob
 - The peer card is a convenience summary, not a separate source of truth
 """
 
-    return render_template(
+    prompt = render_template(
         settings.DIALECTIC.SYSTEM_PROMPT_TEMPLATE,
         {
             "peer_card_explanation": peer_card_explanation,
             "perspective_section": perspective_section,
         },
     )
+    if custom_rules.strip():
+        prompt += f"""
+
+## ADDITIONAL GUIDELINES (workspace-specific)
+
+{custom_rules.strip()}
+"""
+    return prompt
 
 
 def workspace_agent_system_prompt() -> str:

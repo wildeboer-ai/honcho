@@ -17,6 +17,7 @@ class DreamType(str, Enum):
     """Types of dreams that can be triggered."""
 
     OMNI = "omni"
+    INTROSPECTION = "introspection"
 
 
 class ReasoningConfiguration(BaseModel):

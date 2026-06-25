@@ -46,11 +46,15 @@ from tests.unified.schema import (
     LLMJudgeAssertion,
     NotContainsAssertion,
     QueryAction,
+    QueryIntrospectionAction,
     SaveArtifactAction,
     ScheduleDreamAction,
+    SetAgentConfigAction,
     SetSessionConfigAction,
     SetWorkspaceConfigAction,
+    SubmitFeedbackAction,
     TestDefinition,
+    TriggerIntrospectionAction,
     WaitAction,
 )
 
@@ -295,11 +299,13 @@ class UnifiedTestExecutor:
         honcho_client: Honcho,
         anthropic_client: AsyncAnthropic | None,
         artifacts_root: Path | None = None,
+        base_url: str | None = None,
     ):
         self.client: Honcho = honcho_client
         self.anthropic: AsyncAnthropic | None = anthropic_client
         self.artifacts_root: Path = artifacts_root or _resolve_artifacts_root()
         self.current_test_artifacts_dir: Path | None = None
+        self.base_url: str = base_url or ""
 
     async def execute(self, test_def: TestDefinition, test_name: str) -> bool:
         logger.info(f"Starting test: {test_name}")
@@ -573,11 +579,7 @@ class UnifiedTestExecutor:
                 await self.wait_for_queue(step.timeout)
 
         elif isinstance(step, ScheduleDreamAction):
-            await self.client.aio.schedule_dream(
-                observer=step.observer,
-                session=step.session_id,
-                observed=step.observed,
-            )
+            await self.schedule_dream(step)
 
         elif isinstance(step, QueryAction):
             result = await self.perform_query(step)
@@ -590,6 +592,22 @@ class UnifiedTestExecutor:
             logger.info(
                 f"Saved artifact {step.filename} (target={step.target})"
             )
+
+        elif isinstance(step, SetAgentConfigAction):
+            await self.set_agent_config(step)
+
+        elif isinstance(step, SubmitFeedbackAction):
+            result = await self.submit_feedback(step)
+            for assertion in step.assertions:
+                await self.check_assertion(result, assertion)
+
+        elif isinstance(step, TriggerIntrospectionAction):
+            await self.trigger_introspection(step)
+
+        elif isinstance(step, QueryIntrospectionAction):
+            result = await self.query_introspection()
+            for assertion in step.assertions:
+                await self.check_assertion(result, assertion)
 
     async def wait_for_queue(self, timeout: int):
         # Poll deriver status
@@ -770,6 +788,75 @@ class UnifiedTestExecutor:
                             f"Value mismatch for '{k}': expected {v}, got {result_dict[k]}"
                         )
 
+    def _workspace_base_url(self) -> str:
+        if not self.base_url:
+            raise ValueError("base_url is required for direct workspace API actions")
+        return f"{self.base_url}/v3/workspaces/{self.client.workspace_id}"
+
+    async def schedule_dream(self, step: ScheduleDreamAction) -> None:
+        async with httpx.AsyncClient() as http_client:
+            response = await http_client.post(
+                f"{self._workspace_base_url()}/schedule_dream",
+                json={
+                    "observer": step.observer,
+                    "observed": step.observed,
+                    "session_id": step.session_id,
+                    "dream_type": step.dream_type.value,
+                },
+            )
+            response.raise_for_status()
+
+    async def set_agent_config(self, step: SetAgentConfigAction) -> None:
+        agent_config: dict[str, str] = {}
+        if step.deriver_rules is not None:
+            agent_config["deriver_rules"] = step.deriver_rules
+        if step.dialectic_rules is not None:
+            agent_config["dialectic_rules"] = step.dialectic_rules
+
+        async with httpx.AsyncClient() as http_client:
+            response = await http_client.put(
+                self._workspace_base_url(),
+                json={"metadata": {"_agent_config": agent_config}},
+            )
+            response.raise_for_status()
+
+    async def submit_feedback(self, step: SubmitFeedbackAction) -> dict[str, Any]:
+        async with httpx.AsyncClient(timeout=120.0) as http_client:
+            response = await http_client.post(
+                f"{self._workspace_base_url()}/feedback",
+                json={
+                    "message": step.message,
+                    "include_introspection": step.include_introspection,
+                },
+            )
+            response.raise_for_status()
+            return response.json()
+
+    async def trigger_introspection(self, step: TriggerIntrospectionAction) -> None:
+        async with httpx.AsyncClient() as http_client:
+            response = await http_client.post(
+                f"{self._workspace_base_url()}/schedule_dream",
+                json={
+                    "observer": "_system",
+                    "observed": "_introspection",
+                    "dream_type": "introspection",
+                },
+            )
+            response.raise_for_status()
+
+        if step.wait_for_completion:
+            await asyncio.sleep(step.timeout)
+
+    async def query_introspection(self) -> dict[str, Any]:
+        async with httpx.AsyncClient() as http_client:
+            response = await http_client.get(
+                f"{self._workspace_base_url()}/introspection"
+            )
+            if response.status_code == 404:
+                return {"error": "No introspection report found"}
+            response.raise_for_status()
+            return response.json()
+
 
 class UnifiedTestRunner:
     def __init__(
@@ -862,7 +949,11 @@ class UnifiedTestRunner:
                 workspace_id="default",  # Will be overridden per test
             )
 
-            executor = UnifiedTestExecutor(client, self.anthropic)
+            executor = UnifiedTestExecutor(
+                client,
+                self.anthropic,
+                base_url=f"http://localhost:{self.harness.api_port}",
+            )
 
             suite_start_time = time.time()
 

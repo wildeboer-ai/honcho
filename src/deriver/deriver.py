@@ -33,6 +33,13 @@ def _get_deriver_model_config() -> ConfiguredModelSettings:
     return settings.DERIVER.MODEL_CONFIG
 
 
+def _combine_custom_instructions(*parts: str | None) -> str | None:
+    normalized = [part.strip() for part in parts if part and part.strip()]
+    if not normalized:
+        return None
+    return "\n\n".join(normalized)
+
+
 @with_sentry_transaction("minimal_deriver_batch", op="deriver")
 async def process_representation_tasks_batch(
     messages: list[Message],
@@ -86,7 +93,15 @@ async def process_representation_tasks_batch(
     if message_level_configuration.reasoning.enabled is False:
         return
 
-    custom_instructions = message_level_configuration.reasoning.custom_instructions
+    async with tracked_db("minimal_deriver.get_agent_config", read_only=True) as db:
+        agent_config = await crud.get_workspace_agent_config(
+            db, latest_message.workspace_name
+        )
+
+    custom_instructions = _combine_custom_instructions(
+        message_level_configuration.reasoning.custom_instructions,
+        agent_config.deriver_rules,
+    )
 
     accumulate_metric(
         f"minimal_deriver_{latest_message.id}_{observed}",
