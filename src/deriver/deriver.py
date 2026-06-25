@@ -33,8 +33,14 @@ def _get_deriver_model_config() -> ConfiguredModelSettings:
     return settings.DERIVER.MODEL_CONFIG
 
 
-def _combine_custom_instructions(*parts: str | None) -> str | None:
-    normalized = [part.strip() for part in parts if part and part.strip()]
+def _combine_custom_instructions(*parts: object) -> str | None:
+    normalized: list[str] = []
+    for part in parts:
+        if not isinstance(part, str):
+            continue
+        stripped = part.strip()
+        if stripped:
+            normalized.append(stripped)
     if not normalized:
         return None
     return "\n\n".join(normalized)
