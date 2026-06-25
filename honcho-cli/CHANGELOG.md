@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](http://keepachangelog.com/)
 and this project adheres to [Semantic Versioning](http://semver.org/).
 
+## [0.1.2] - 2026-06-25
+
+### Added
+
+- Add the `honcho-tui` Textual terminal interface for browsing sessions, peer cards, conclusions, queue state, and dialectic chat from the shared CLI config.
+
 ## [0.1.1] - 2026-06-15
 
 ### Fixed

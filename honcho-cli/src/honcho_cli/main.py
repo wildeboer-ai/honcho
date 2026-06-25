@@ -1,3 +1,5 @@
+# ruff: noqa: E402
+
 """Honcho CLI — a terminal for Honcho.
 
 Entry point and top-level command group.
@@ -14,8 +16,8 @@ from rich.console import Console
 from honcho_cli import __version__
 from honcho_cli._help import HonchoTyperGroup, print_welcome
 from honcho_cli.branding import BANNER
+from honcho_cli.common import _global_overrides
 from honcho_cli.output import set_json_mode
-
 
 app = typer.Typer(
     name="honcho",
@@ -52,10 +54,17 @@ def version_callback(value: bool) -> None:
 def main(
     ctx: typer.Context,
     json_output: bool = typer.Option(False, "--json", help="Force JSON output"),
+    workspace: str | None = typer.Option(None, "--workspace", "-w", envvar="HONCHO_WORKSPACE_ID", help="Override workspace ID"),
+    peer: str | None = typer.Option(None, "--peer", "-p", envvar="HONCHO_PEER_ID", help="Override peer ID"),
+    session: str | None = typer.Option(None, "--session", "-s", envvar="HONCHO_SESSION_ID", help="Override session ID"),
     version: bool = typer.Option(False, "--version", "-V", callback=version_callback, is_eager=True, help="Show version"),
 ) -> None:
     """Honcho CLI — admin & debugging tool for Honcho workspaces."""
+    _ = version
     set_json_mode(json_output)
+    _global_overrides["workspace"] = workspace
+    _global_overrides["peer"] = peer
+    _global_overrides["session"] = session
 
     if ctx.invoked_subcommand is None:
         print_welcome(Console())
@@ -77,8 +86,8 @@ def help_cmd(ctx: typer.Context) -> None:
 
 
 # Register command groups
-from honcho_cli.commands.config_cmd import app as config_app
 from honcho_cli.commands.conclusion import app as conclusion_app
+from honcho_cli.commands.config_cmd import app as config_app
 from honcho_cli.commands.message import app as message_app
 from honcho_cli.commands.peer import app as peer_app
 from honcho_cli.commands.session import app as session_app
