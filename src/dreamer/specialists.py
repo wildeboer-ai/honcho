@@ -287,6 +287,7 @@ If you update it, send the full deduplicated list and remove stale entries.
                 max_tool_iterations=self.get_max_iterations(),
                 messages=messages,
                 track_name=f"Dreamer/{self.name}",
+                trace_name=f"dreamer_{self.name}",
                 telemetry=LLMTelemetryContext(
                     workspace_name=workspace_name,
                     call_purpose=call_purpose_slug,

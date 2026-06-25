@@ -128,4 +128,5 @@ async def test_deduction_specialist_uses_nested_model_config(
 
     assert result.content == "done"
     assert kwargs["model_config"] == expected_config
+    assert kwargs["trace_name"] == "dreamer_deduction"
     assert "llm_settings" not in kwargs

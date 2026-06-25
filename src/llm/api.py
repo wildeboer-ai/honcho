@@ -422,9 +422,9 @@ async def honcho_llm_call(
         if toolless_hit_input_token_cap and isinstance(result, HonchoLLMCallResponse):
             result.hit_input_token_cap = True
 
-        if trace_name and isinstance(result, HonchoLLMCallResponse):
+        if isinstance(result, HonchoLLMCallResponse):
             log_reasoning_trace(
-                task_type=trace_name,
+                task_type=trace_name or "untagged",
                 model_config=runtime_model_config,
                 prompt=prompt,
                 response=result,
@@ -461,9 +461,9 @@ async def honcho_llm_call(
         iteration_callback=iteration_callback,
         telemetry=telemetry,
     )
-    if trace_name and isinstance(result, HonchoLLMCallResponse):
+    if isinstance(result, HonchoLLMCallResponse):
         log_reasoning_trace(
-            task_type=trace_name,
+            task_type=trace_name or "untagged",
             model_config=runtime_model_config,
             prompt=prompt,
             response=result,
