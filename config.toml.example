@@ -271,6 +271,25 @@ MAX_RETRIES = 3
 MAX_BUFFER_SIZE = 10000
 # NAMESPACE = "honcho"  # Inherits from app.NAMESPACE if not set
 
+# Dev tools observability settings (optional, opt-in)
+[dev_tools]
+ENABLED = false
+ENVIRONMENT = "development"
+TRACING_ENABLED = false
+OTLP_TRACES_ENDPOINT = "http://localhost:4318/v1/traces"
+INSTRUMENT_FASTAPI = true
+INSTRUMENT_SQLALCHEMY = true
+INSTRUMENT_REDIS = true
+INSTRUMENT_REQUESTS = true
+INSTRUMENT_HTTPX = true
+LOKI_ENABLED = false
+LOKI_URL = "http://localhost:3100"
+LOKI_TAGS = { instance = "local" }
+VAULT_ENABLED = false
+VAULT_ADDR = "http://localhost:8200"
+VAULT_TOKEN = ""
+VAULT_TOKEN_ENV = "VAULT_TOKEN"
+
 # Cache settings
 [cache]
 ENABLED = false

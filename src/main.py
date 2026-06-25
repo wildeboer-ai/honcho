@@ -20,6 +20,7 @@ from src._version import HONCHO_VERSION
 from src.cache.client import close_cache, init_cache
 from src.config import settings
 from src.db import engine, register_db_query_instrumentation, request_context
+from src.dev_tools import setup_dev_tools
 from src.exceptions import HonchoException
 from src.routers import (
     conclusions,
@@ -182,6 +183,8 @@ app = FastAPI(
         "url": "https://github.com/plastic-labs/honcho/blob/main/LICENSE",
     },
 )
+
+setup_dev_tools(service_name="honcho-api", app=app)
 
 app.add_middleware(
     CORSMiddleware,
