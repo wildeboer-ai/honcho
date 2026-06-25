@@ -1,5 +1,9 @@
 import { API_VERSION } from './api-version'
 import { HonchoHTTPClient } from './http/client'
+import {
+  createDialecticStream,
+  type DialecticStreamResponse,
+} from './http/streaming'
 import { Message } from './message'
 import { Page } from './pagination'
 import { Peer } from './peer'
@@ -12,6 +16,8 @@ import type {
   QueueStatusParams,
   QueueStatusResponse,
   SessionResponse,
+  WorkspaceChatParams,
+  WorkspaceChatResponse,
   WorkspaceResponse,
 } from './types/api'
 import { resolveId, transformQueueStatus } from './utils'
@@ -49,6 +55,7 @@ import {
 } from './validation'
 
 const DEFAULT_BASE_URL = 'https://api.honcho.dev'
+type ReasoningLevel = 'minimal' | 'low' | 'medium' | 'high' | 'max'
 
 /**
  * Main client for the Honcho TypeScript SDK.
@@ -260,6 +267,34 @@ export class Honcho {
     return this._http.post<MessageResponse[]>(
       `/${API_VERSION}/workspaces/${workspaceId}/search`,
       { body: params }
+    )
+  }
+
+  private async _workspaceChat(
+    workspaceId: string,
+    params: WorkspaceChatParams
+  ): Promise<WorkspaceChatResponse> {
+    await this._ensureWorkspace()
+    return this._http.post<WorkspaceChatResponse>(
+      `/${API_VERSION}/workspaces/${workspaceId}/chat`,
+      { body: params }
+    )
+  }
+
+  private async _workspaceChatStream(
+    workspaceId: string,
+    params: Omit<WorkspaceChatParams, 'stream'>
+  ): Promise<Response> {
+    await this._ensureWorkspace()
+    return this._http.stream(
+      'POST',
+      `/${API_VERSION}/workspaces/${workspaceId}/chat`,
+      {
+        body: {
+          ...params,
+          stream: true,
+        },
+      }
     )
   }
 
@@ -839,6 +874,70 @@ export class Honcho {
 
     const status = await this._getQueueStatus(this.workspaceId, queryParams)
     return transformQueueStatus(status)
+  }
+
+  /**
+   * Query the workspace's collective knowledge using natural language.
+   *
+   * Performs agentic search and reasoning across all peers and observations in
+   * the workspace to synthesize an answer.
+   *
+   * @param query - The natural language question to ask
+   * @param options.session - Optional session to scope message search to
+   * @param options.reasoningLevel - Optional reasoning level for the query
+   * @returns Promise resolving to the response string, or null if no relevant information
+   */
+  async chat(
+    query: string,
+    options?: {
+      session?: string | Session
+      reasoningLevel?: ReasoningLevel
+    }
+  ): Promise<string | null> {
+    const validatedQuery = SearchQuerySchema.parse(query)
+    const resolvedSessionId = options?.session
+      ? resolveId(options.session)
+      : undefined
+
+    const response = await this._workspaceChat(this.workspaceId, {
+      query: validatedQuery,
+      stream: false,
+      session_id: resolvedSessionId,
+      reasoning_level: options?.reasoningLevel,
+    })
+    if (!response.content) {
+      return null
+    }
+    return response.content
+  }
+
+  /**
+   * Query the workspace's collective knowledge with streaming response.
+   *
+   * @param query - The natural language question to ask
+   * @param options.session - Optional session to scope message search to
+   * @param options.reasoningLevel - Optional reasoning level for the query
+   * @returns Promise resolving to a DialecticStreamResponse that can be iterated over
+   */
+  async chatStream(
+    query: string,
+    options?: {
+      session?: string | Session
+      reasoningLevel?: ReasoningLevel
+    }
+  ): Promise<DialecticStreamResponse> {
+    const validatedQuery = SearchQuerySchema.parse(query)
+    const resolvedSessionId = options?.session
+      ? resolveId(options.session)
+      : undefined
+
+    const response = await this._workspaceChatStream(this.workspaceId, {
+      query: validatedQuery,
+      session_id: resolvedSessionId,
+      reasoning_level: options?.reasoningLevel,
+    })
+
+    return createDialecticStream(response)
   }
 
   /**

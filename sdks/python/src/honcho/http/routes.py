@@ -20,6 +20,10 @@ def workspace_search(workspace_id: str) -> str:
     return f"/{API_VERSION}/workspaces/{workspace_id}/search"
 
 
+def workspace_chat(workspace_id: str) -> str:
+    return f"/{API_VERSION}/workspaces/{workspace_id}/chat"
+
+
 def workspace_queue_status(workspace_id: str) -> str:
     return f"/{API_VERSION}/workspaces/{workspace_id}/queue/status"
 

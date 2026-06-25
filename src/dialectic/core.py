@@ -349,6 +349,22 @@ class DialecticAgent:
             peer_name=self.observed,
         )
 
+    def _get_tools(self) -> list[dict[str, Any]]:
+        """Return the tool definitions for this agent."""
+        return (
+            DIALECTIC_TOOLS_MINIMAL
+            if self.reasoning_level == "minimal"
+            else DIALECTIC_TOOLS
+        )
+
+    def _event_peer_name(self) -> str:
+        """Peer name to report on the aggregate DialecticCompletedEvent."""
+        return self.observed
+
+    def _performance_trace_name(self) -> str:
+        """Trace name used for local performance logs."""
+        return "dialectic_chat"
+
     def _stringify_tool_result_content(self, content: Any) -> str:
         """Convert provider-specific tool result content into stable text."""
         if content is None:
@@ -575,7 +591,7 @@ class DialecticAgent:
         accumulate_metric(task_name, "total_duration", elapsed_ms, "ms")
 
         if not self.metric_key and run_id is not None:
-            log_performance_metrics("dialectic_chat", run_id)
+            log_performance_metrics(self._performance_trace_name(), run_id)
 
         # Prometheus metrics
         if settings.METRICS.ENABLED:
@@ -597,7 +613,7 @@ class DialecticAgent:
             DialecticCompletedEvent(
                 run_id=self._run_id,
                 workspace_name=self.workspace_name,
-                peer_name=self.observed,
+                peer_name=self._event_peer_name(),
                 session_name=self.session_name,
                 reasoning_level=self.reasoning_level,
                 two_phase_mode=two_phase_mode,
@@ -637,12 +653,7 @@ class DialecticAgent:
             self.reasoning_level
         )
 
-        # Use minimal tools for minimal reasoning to reduce cost
-        tools = (
-            DIALECTIC_TOOLS_MINIMAL
-            if self.reasoning_level == "minimal"
-            else DIALECTIC_TOOLS
-        )
+        tools = self._get_tools()
 
         if synthesis_model_config is not None:
             search_max_tokens = level_settings.MAX_OUTPUT_TOKENS or 1024
@@ -774,12 +785,7 @@ class DialecticAgent:
             self.reasoning_level
         )
 
-        # Use minimal tools for minimal reasoning to reduce cost
-        tools = (
-            DIALECTIC_TOOLS_MINIMAL
-            if self.reasoning_level == "minimal"
-            else DIALECTIC_TOOLS
-        )
+        tools = self._get_tools()
 
         if synthesis_model_config is not None:
             search_max_tokens = level_settings.MAX_OUTPUT_TOKENS or 1024

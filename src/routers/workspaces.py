@@ -1,20 +1,24 @@
 """FastAPI routes for workspace resources and workspace-scoped operations."""
 
+import json
 import logging
-from collections.abc import Sequence
+from collections.abc import AsyncIterator, Sequence
 from typing import Any
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Path, Query, Response
+from fastapi.responses import StreamingResponse
 from fastapi_pagination import Page
 from fastapi_pagination.ext.sqlalchemy import apaginate
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src import crud, schemas
 from src.config import settings
-from src.dependencies import db, read_db
+from src.dependencies import db, read_db, tracked_db
 from src.deriver.enqueue import enqueue_deletion, enqueue_dream
+from src.dialectic.chat import workspace_chat, workspace_chat_stream
 from src.exceptions import AuthenticationException
 from src.security import JWTParams, require_auth
+from src.telemetry import prometheus_metrics
 from src.utils.search import search
 
 logger = logging.getLogger(__name__)
@@ -263,6 +267,77 @@ async def get_queue_work_units(
     except ValueError as e:
         logger.warning(f"Invalid request parameters: {str(e)}")
         raise HTTPException(status_code=400, detail=str(e)) from e
+
+
+@router.post(
+    "/{workspace_id}/chat",
+    summary="Query workspace knowledge using natural language",
+    responses={
+        200: {
+            "content": {
+                "application/json": {
+                    "schema": schemas.DialecticResponse.model_json_schema()
+                },
+                "text/event-stream": {},
+            },
+        },
+    },
+    dependencies=[Depends(require_auth(workspace_name="workspace_id"))],
+)
+async def chat(
+    workspace_id: str = Path(...),
+    options: schemas.WorkspaceChatOptions = Body(...),
+):
+    """
+    Query the Workspace's collective knowledge using natural language.
+
+    The workspace agent can discover relevant peers, search workspace messages,
+    and drill into specific peer representations to synthesize an answer.
+    """
+    async with tracked_db("workspaces.chat.preflight", read_only=True) as session:
+        await crud.get_workspace(session, workspace_name=workspace_id)
+
+    if options.stream:
+
+        async def format_sse_stream(
+            chunks: AsyncIterator[str],
+        ) -> AsyncIterator[str]:
+            async for chunk in chunks:
+                yield f"data: {json.dumps({'delta': {'content': chunk}, 'done': False})}\n\n"
+            yield f"data: {json.dumps({'done': True})}\n\n"
+
+        if settings.METRICS.ENABLED:
+            prometheus_metrics.record_dialectic_call(
+                workspace_name=workspace_id,
+                reasoning_level=options.reasoning_level,
+            )
+
+        return StreamingResponse(
+            format_sse_stream(
+                workspace_chat_stream(
+                    workspace_name=workspace_id,
+                    session_name=options.session_id,
+                    query=options.query,
+                    reasoning_level=options.reasoning_level,
+                )
+            ),
+            media_type="text/event-stream",
+        )
+
+    if settings.METRICS.ENABLED:
+        prometheus_metrics.record_dialectic_call(
+            workspace_name=workspace_id,
+            reasoning_level=options.reasoning_level,
+        )
+
+    response = await workspace_chat(
+        workspace_name=workspace_id,
+        session_name=options.session_id,
+        query=options.query,
+        reasoning_level=options.reasoning_level,
+    )
+
+    return schemas.DialecticResponse(content=response if response else None)
 
 
 @router.post(

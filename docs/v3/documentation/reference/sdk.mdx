@@ -200,6 +200,12 @@ sessions = honcho.sessions()
 # Search across all content in workspace
 results = honcho.search(query)
 
+# Query knowledge across all peers in workspace
+response = honcho.chat(query)
+
+# Stream workspace-level chat
+stream = honcho.chat_stream(query)
+
 # Workspace metadata management
 metadata = honcho.get_metadata()
 honcho.set_metadata(dict)
@@ -231,6 +237,12 @@ const sessions = await honcho.sessions();
 
 // Search across all content in workspace (returns Page<any>)
 const results = await honcho.search(query);
+
+// Query knowledge across all peers in workspace
+const response = await honcho.chat(query);
+
+// Stream workspace-level chat
+const stream = await honcho.chatStream(query);
 
 // Workspace metadata management
 const metadata = await honcho.getMetadata();

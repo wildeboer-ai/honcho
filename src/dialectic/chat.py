@@ -1,8 +1,7 @@
 """
 Chat functionality for the Dialectic API.
 
-Provides the agentic_chat function for answering queries about peers
-using the DialecticAgent.
+Provides peer-level and workspace-level entry points for answering queries.
 """
 
 import logging
@@ -12,6 +11,7 @@ from src import crud, schemas
 from src.config import ReasoningLevel
 from src.dependencies import tracked_db
 from src.dialectic.core import DialecticAgent
+from src.dialectic.workspace import WorkspaceDialecticAgent
 from src.utils.config_helpers import get_configuration
 
 logger = logging.getLogger(__name__)
@@ -136,5 +136,54 @@ async def agentic_chat_stream(
         reasoning_level=reasoning_level,
     )
 
+    async for chunk in agent.answer_stream(query):
+        yield chunk
+
+
+async def workspace_chat(
+    workspace_name: str,
+    session_name: str | None,
+    query: str,
+    reasoning_level: ReasoningLevel = "low",
+) -> str:
+    """Answer a workspace-level query using the workspace dialectic agent."""
+    async with tracked_db("dialectic.workspace_chat.preflight", read_only=True) as db:
+        if session_name:
+            await crud.get_session(
+                db,
+                workspace_name=workspace_name,
+                session_name=session_name,
+            )
+
+    agent = WorkspaceDialecticAgent(
+        workspace_name=workspace_name,
+        session_name=session_name,
+        reasoning_level=reasoning_level,
+    )
+    return await agent.answer(query)
+
+
+async def workspace_chat_stream(
+    workspace_name: str,
+    session_name: str | None,
+    query: str,
+    reasoning_level: ReasoningLevel = "low",
+) -> AsyncIterator[str]:
+    """Stream a workspace-level query answer using the workspace dialectic agent."""
+    async with tracked_db(
+        "dialectic.workspace_chat_stream.preflight", read_only=True
+    ) as db:
+        if session_name:
+            await crud.get_session(
+                db,
+                workspace_name=workspace_name,
+                session_name=session_name,
+            )
+
+    agent = WorkspaceDialecticAgent(
+        workspace_name=workspace_name,
+        session_name=session_name,
+        reasoning_level=reasoning_level,
+    )
     async for chunk in agent.answer_stream(query):
         yield chunk

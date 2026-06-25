@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
-from collections.abc import Mapping
+from collections.abc import Generator, Mapping
 from typing import Any, Literal
 
 import httpx
@@ -29,7 +29,8 @@ from .mixins import MetadataConfigMixin
 from .pagination import SyncPage
 from .peer import Peer
 from .session import Session
-from .utils import normalize_peers_to_dict, resolve_id
+from .types import DialecticStreamResponse
+from .utils import normalize_peers_to_dict, parse_sse_stream, resolve_id
 
 logger = logging.getLogger(__name__)
 
@@ -616,6 +617,88 @@ class Honcho(BaseModel, MetadataConfigMixin):  # pyright: ignore[reportUnsafeMul
             Message.from_api_response(MessageResponse.model_validate(item))
             for item in data
         ]
+
+    @validate_call(config=ConfigDict(arbitrary_types_allowed=True))
+    def chat(
+        self,
+        query: str = Field(..., min_length=1, description="The natural language query"),
+        *,
+        session: str | SessionBase | None = None,
+        reasoning_level: Literal["minimal", "low", "medium", "high", "max"]
+        | None = None,
+    ) -> str | None:
+        """
+        Query the workspace's collective knowledge.
+
+        Args:
+            query: The natural language question to ask.
+            session: Optional session to scope message search to. Can be a session
+                ID string or a Session object.
+            reasoning_level: Optional reasoning level for the query: "minimal", "low",
+                "medium", "high", or "max". Defaults to "low" if not provided.
+
+        Returns:
+            Response string containing the answer, or None if no relevant information.
+        """
+        self._ensure_workspace()
+        resolved_session_id = resolve_id(session)
+
+        body: dict[str, Any] = {"query": query, "stream": False}
+        if resolved_session_id:
+            body["session_id"] = resolved_session_id
+        if reasoning_level:
+            body["reasoning_level"] = reasoning_level
+
+        data = self._http.post(
+            routes.workspace_chat(self.workspace_id),
+            body=body,
+        )
+        content = data.get("content")
+        if not content:
+            return None
+        return content
+
+    @validate_call(config=ConfigDict(arbitrary_types_allowed=True))
+    def chat_stream(
+        self,
+        query: str = Field(..., min_length=1, description="The natural language query"),
+        *,
+        session: str | SessionBase | None = None,
+        reasoning_level: Literal["minimal", "low", "medium", "high", "max"]
+        | None = None,
+    ) -> DialecticStreamResponse:
+        """
+        Query the workspace's collective knowledge with streaming.
+
+        Args:
+            query: The natural language question to ask.
+            session: Optional session to scope message search to. Can be a session
+                ID string or a Session object.
+            reasoning_level: Optional reasoning level for the query: "minimal", "low",
+                "medium", "high", or "max". Defaults to "low" if not provided.
+
+        Returns:
+            DialecticStreamResponse object that can be iterated over.
+        """
+        self._ensure_workspace()
+        resolved_session_id = resolve_id(session)
+
+        body: dict[str, Any] = {"query": query, "stream": True}
+        if resolved_session_id:
+            body["session_id"] = resolved_session_id
+        if reasoning_level:
+            body["reasoning_level"] = reasoning_level
+
+        def stream_response() -> Generator[str, None, None]:
+            yield from parse_sse_stream(
+                self._http.stream(
+                    "POST",
+                    routes.workspace_chat(self.workspace_id),
+                    body=body,
+                )
+            )
+
+        return DialecticStreamResponse(stream_response())
 
     @validate_call(config=ConfigDict(arbitrary_types_allowed=True))
     def queue_status(
