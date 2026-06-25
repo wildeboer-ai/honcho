@@ -1772,6 +1772,7 @@ async def _handle_search_messages(
         context_window=2,
         embedding=query_embedding,
         observer=ctx.observer,
+        peer_name=ctx.observed,
     )
     search_meta: dict[str, Any] = {
         "top_k": limit,

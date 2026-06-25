@@ -312,6 +312,10 @@ class OpenAIBackend:
         if tools:
             params["tools"] = self._convert_tools(tools)
             if tool_choice is not None:
+                # OpenAI accepts only "none" | "auto" | "required" (or a function spec).
+                # Other backends use "any" with the same semantics as "required".
+                if tool_choice == "any":
+                    tool_choice = "required"
                 params["tool_choice"] = tool_choice
         if extra_params:
             for key in (
@@ -322,6 +326,8 @@ class OpenAIBackend:
             ):
                 if key in extra_params:
                     params[key] = extra_params[key]
+            if "metadata" in extra_params:
+                params["metadata"] = extra_params["metadata"]
         return params
 
     def _normalize_response(

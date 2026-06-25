@@ -7,10 +7,6 @@ resolution-markers = [
     "python_full_version < '3.13'",
 ]
 
-[options]
-exclude-newer = "2026-05-28T15:27:36.945866Z"
-exclude-newer-span = "P5D"
-
 [manifest]
 members = [
     "honcho",
@@ -1159,7 +1155,7 @@ wheels = [
 
 [[package]]
 name = "honcho"
-version = "3.0.9"
+version = "3.0.10"
 source = { virtual = "." }
 dependencies = [
     { name = "alembic" },
@@ -1302,7 +1298,7 @@ dev = [{ name = "ruff", specifier = ">=0.11.13" }]
 
 [[package]]
 name = "honcho-cli"
-version = "0.1.0"
+version = "0.1.1"
 source = { editable = "honcho-cli" }
 dependencies = [
     { name = "click" },
