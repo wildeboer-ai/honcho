@@ -305,21 +305,23 @@ class QueueManager:
                 minutes=settings.DERIVER.STALE_SESSION_TIMEOUT_MINUTES
             )
 
-            stale_ids = (
-                (
-                    await db.execute(
-                        select(models.ActiveQueueSession.id)
-                        .where(models.ActiveQueueSession.last_updated < cutoff)
-                        .order_by(models.ActiveQueueSession.last_updated)
-                        .with_for_update(skip_locked=True)
+            stale_rows = (
+                await db.execute(
+                    select(
+                        models.ActiveQueueSession.id,
+                        models.ActiveQueueSession.work_unit_key,
                     )
+                    .where(models.ActiveQueueSession.last_updated < cutoff)
+                    .order_by(models.ActiveQueueSession.last_updated)
+                    .with_for_update(skip_locked=True)
                 )
-                .scalars()
-                .all()
-            )
+            ).all()
 
             # Delete only the records we successfully got locks for
-            if stale_ids:
+            if stale_rows:
+                stale_ids = [row[0] for row in stale_rows]
+                stale_keys = [row[1] for row in stale_rows]
+                logger.info("STALE_CLEANUP count=%d keys=%s", len(stale_ids), stale_keys)
                 await db.execute(
                     delete(models.ActiveQueueSession).where(
                         models.ActiveQueueSession.id.in_(stale_ids)
