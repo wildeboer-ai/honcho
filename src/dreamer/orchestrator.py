@@ -413,6 +413,49 @@ DREAM: {payload.dream_type} documents for {workspace_name}/{payload.observer}/{p
                         len(result.suggestions),
                     )
 
+            case DreamType.REASONING:
+                from src.agents.dreamer.reasoning import process_reasoning_dream
+
+                async with tracked_db("reasoning_dream") as db:
+                    result = await process_reasoning_dream(
+                        db,
+                        workspace_name,
+                        payload.observer,
+                        payload.observed,
+                        min_observations_threshold=settings.DREAM.REASONING_MIN_OBSERVATIONS,
+                        min_unfalsified_threshold=settings.DREAM.REASONING_MIN_UNFALSIFIED,
+                        max_iterations=settings.DREAM.REASONING_MAX_ITERATIONS,
+                    )
+
+                logger.info("Reasoning dream completed: %s", result.to_dict())
+
+                now_iso = datetime.now(timezone.utc).isoformat()
+                async with tracked_db("reasoning_dream.guard_pair_write") as db:
+                    collection = await crud.get_collection(
+                        db,
+                        workspace_name,
+                        observer=payload.observer,
+                        observed=payload.observed,
+                        with_for_update=True,
+                    )
+                    count_stmt = select(func.count(models.Document.id)).where(
+                        models.Document.workspace_name == workspace_name,
+                        models.Document.observer == payload.observer,
+                        models.Document.observed == payload.observed,
+                        models.Document.level == "explicit",
+                    )
+                    current_explicit_count = int(await db.scalar(count_stmt) or 0)
+                    dream_meta = dict(collection.internal_metadata.get("dream", {}))
+                    dream_meta["last_dream_at"] = now_iso
+                    dream_meta["last_dream_document_count"] = current_explicit_count
+                    await crud.update_collection_internal_metadata(
+                        db,
+                        workspace_name,
+                        payload.observer,
+                        payload.observed,
+                        update_data={"dream": dream_meta},
+                    )
+
     except Exception as e:
         logger.error(
             f"Error processing dream task {payload.dream_type} for {payload.observer}/{payload.observed}: {str(e)}",

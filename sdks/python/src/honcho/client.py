@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import os
 from collections.abc import Generator, Mapping
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 import httpx
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, validate_call
@@ -28,6 +28,14 @@ from .message import Message
 from .mixins import MetadataConfigMixin
 from .pagination import SyncPage
 from .peer import Peer
+from .reasoning_types import (
+    FalsificationTrace,
+    Hypothesis,
+    HypothesisGenealogy,
+    Induction,
+    InductionSources,
+    Prediction,
+)
 from .session import Session
 from .types import DialecticStreamResponse
 from .utils import normalize_peers_to_dict, parse_sse_stream, resolve_id
@@ -39,6 +47,15 @@ ENVIRONMENTS = {
     "local": "http://localhost:8000",
     "production": "https://api.honcho.dev",
 }
+
+
+def _page_items(data: Any) -> list[dict[str, Any]]:
+    if isinstance(data, dict):
+        page = cast(dict[str, Any], data)
+        items = page.get("items")
+        if isinstance(items, list):
+            return cast(list[dict[str, Any]], items)
+    return []
 
 
 class Honcho(BaseModel, MetadataConfigMixin):  # pyright: ignore[reportUnsafeMultipleInheritance]
@@ -740,6 +757,7 @@ class Honcho(BaseModel, MetadataConfigMixin):  # pyright: ignore[reportUnsafeMul
         observer: str | PeerBase,
         session: str | SessionBase | None = None,
         observed: str | PeerBase | None = None,
+        dream_type: Literal["omni", "introspection", "reasoning"] = "omni",
     ) -> None:
         """
         Schedule a dream task for memory consolidation.
@@ -754,6 +772,7 @@ class Honcho(BaseModel, MetadataConfigMixin):  # pyright: ignore[reportUnsafeMul
             session: Optional session (ID string or Session object) to scope the dream to.
             observed: Optional observed peer (ID string or Peer object). If not provided,
                 defaults to the observer (self-reflection).
+            dream_type: Dream type to schedule.
         """
         self._ensure_workspace()
         resolved_observer_id = resolve_id(observer)
@@ -768,8 +787,190 @@ class Honcho(BaseModel, MetadataConfigMixin):  # pyright: ignore[reportUnsafeMul
                 "observer": resolved_observer_id,
                 "observed": resolved_observed_id,
                 "session_id": resolved_session_id,
-                "dream_type": "omni",
+                "dream_type": dream_type,
             },
+        )
+
+    def get_hypotheses(
+        self,
+        *,
+        observer: str | None = None,
+        observed: str | None = None,
+        status: Literal["active", "superseded", "falsified"] | None = None,
+        tier: int | None = None,
+    ) -> list[Hypothesis]:
+        """List top-down hypotheses in the current workspace."""
+        self._ensure_workspace()
+        query: dict[str, Any] = {}
+        if observer:
+            query["observer"] = observer
+        if observed:
+            query["observed"] = observed
+        if status:
+            query["status"] = status
+        if tier is not None:
+            query["tier"] = tier
+
+        data = self._http.get(
+            routes.hypotheses(self.workspace_id),
+            query=query if query else None,
+        )
+        return cast(list[Hypothesis], _page_items(data))
+
+    def get_hypothesis(self, hypothesis_id: str) -> Hypothesis:
+        """Get a top-down hypothesis by ID."""
+        self._ensure_workspace()
+        return cast(
+            Hypothesis,
+            self._http.get(routes.hypothesis(self.workspace_id, hypothesis_id)),
+        )
+
+    def get_hypothesis_predictions(
+        self,
+        hypothesis_id: str,
+        *,
+        status: Literal["untested", "unfalsified", "falsified"] | None = None,
+    ) -> list[Prediction]:
+        """List predictions generated from a hypothesis."""
+        self._ensure_workspace()
+        query = {"status": status} if status else None
+        data = self._http.get(
+            routes.hypothesis_predictions(self.workspace_id, hypothesis_id),
+            query=query,
+        )
+        return cast(list[Prediction], _page_items(data))
+
+    def get_hypothesis_genealogy(self, hypothesis_id: str) -> HypothesisGenealogy:
+        """Get parent/child evolution metadata for a hypothesis."""
+        self._ensure_workspace()
+        return cast(
+            HypothesisGenealogy,
+            self._http.get(
+                routes.hypothesis_genealogy(self.workspace_id, hypothesis_id)
+            ),
+        )
+
+    def get_predictions(
+        self,
+        *,
+        hypothesis_id: str | None = None,
+        status: Literal["untested", "unfalsified", "falsified"] | None = None,
+        is_blind: bool | None = None,
+    ) -> list[Prediction]:
+        """List top-down predictions in the current workspace."""
+        self._ensure_workspace()
+        query: dict[str, Any] = {}
+        if hypothesis_id:
+            query["hypothesis_id"] = hypothesis_id
+        if status:
+            query["status"] = status
+        if is_blind is not None:
+            query["is_blind"] = is_blind
+
+        data = self._http.get(
+            routes.predictions(self.workspace_id),
+            query=query if query else None,
+        )
+        return cast(list[Prediction], _page_items(data))
+
+    def get_prediction(self, prediction_id: str) -> Prediction:
+        """Get a top-down prediction by ID."""
+        self._ensure_workspace()
+        return cast(
+            Prediction,
+            self._http.get(routes.prediction(self.workspace_id, prediction_id)),
+        )
+
+    def search_predictions(
+        self,
+        query: str,
+        *,
+        hypothesis_id: str | None = None,
+    ) -> list[Prediction]:
+        """Search top-down predictions by semantic similarity."""
+        self._ensure_workspace()
+        body: dict[str, Any] = {"query": query}
+        if hypothesis_id:
+            body["hypothesis_id"] = hypothesis_id
+        data = self._http.post(routes.predictions_search(self.workspace_id), body=body)
+        return cast(list[Prediction], data if isinstance(data, list) else [])
+
+    def get_prediction_traces(self, prediction_id: str) -> list[FalsificationTrace]:
+        """List falsification traces for a prediction."""
+        self._ensure_workspace()
+        data = self._http.get(
+            routes.prediction_traces(self.workspace_id, prediction_id)
+        )
+        return cast(list[FalsificationTrace], _page_items(data))
+
+    def get_traces(
+        self,
+        *,
+        prediction_id: str | None = None,
+        final_status: Literal["untested", "unfalsified", "falsified"] | None = None,
+    ) -> list[FalsificationTrace]:
+        """List falsification traces in the current workspace."""
+        self._ensure_workspace()
+        query: dict[str, Any] = {}
+        if prediction_id:
+            query["prediction_id"] = prediction_id
+        if final_status:
+            query["final_status"] = final_status
+
+        data = self._http.get(
+            routes.traces(self.workspace_id),
+            query=query if query else None,
+        )
+        return cast(list[FalsificationTrace], _page_items(data))
+
+    def get_trace(self, trace_id: str) -> FalsificationTrace:
+        """Get a falsification trace by ID."""
+        self._ensure_workspace()
+        return cast(
+            FalsificationTrace,
+            self._http.get(routes.trace(self.workspace_id, trace_id)),
+        )
+
+    def get_inductions(
+        self,
+        *,
+        observer: str | None = None,
+        observed: str | None = None,
+        pattern_type: str | None = None,
+        confidence: Literal["high", "medium", "low"] | None = None,
+    ) -> list[Induction]:
+        """List top-down induction patterns in the current workspace."""
+        self._ensure_workspace()
+        query: dict[str, Any] = {}
+        if observer:
+            query["observer"] = observer
+        if observed:
+            query["observed"] = observed
+        if pattern_type:
+            query["pattern_type"] = pattern_type
+        if confidence:
+            query["confidence"] = confidence
+
+        data = self._http.get(
+            routes.inductions(self.workspace_id),
+            query=query if query else None,
+        )
+        return cast(list[Induction], _page_items(data))
+
+    def get_induction(self, induction_id: str) -> Induction:
+        """Get a top-down induction by ID."""
+        self._ensure_workspace()
+        return cast(
+            Induction,
+            self._http.get(routes.induction(self.workspace_id, induction_id)),
+        )
+
+    def get_induction_sources(self, induction_id: str) -> InductionSources:
+        """Get the source predictions and premises behind an induction."""
+        self._ensure_workspace()
+        return cast(
+            InductionSources,
+            self._http.get(routes.induction_sources(self.workspace_id, induction_id)),
         )
 
     def __repr__(self) -> str:

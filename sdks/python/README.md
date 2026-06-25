@@ -132,6 +132,37 @@ response = alice.chat("What does Bob think about this project?",
                      session=session)
 ```
 
+## Reasoning Artifacts
+
+Reasoning dreams can generate read-only artifacts that expose the system's
+hypotheses, predictions, falsification traces, and induced patterns.
+
+```python
+# Query hypotheses for a peer pair.
+hypotheses = client.get_hypotheses(
+    observer="user-123",
+    observed="user-123",
+    status="active",
+)
+
+for hypothesis in hypotheses:
+    print(hypothesis["content"])
+    print(hypothesis["confidence"])
+
+# Peer helpers scope observer to the peer itself.
+peer = client.peer("user-123")
+patterns = peer.get_inductions(confidence="high", pattern_type="behavior")
+
+# Inspect prediction evidence.
+predictions = client.get_predictions(status="unfalsified")
+if predictions:
+    traces = client.get_prediction_traces(predictions[0]["id"])
+    print(len(traces))
+```
+
+The SDK exports `Hypothesis`, `Prediction`, `FalsificationTrace`, `Induction`,
+`HypothesisGenealogy`, and `InductionSources` TypedDicts for these responses.
+
 ## Configuration
 
 ### Environment Variables

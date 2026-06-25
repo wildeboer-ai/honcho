@@ -63,6 +63,14 @@ from .http.exceptions import (
 from .message import Message
 from .pagination import AsyncPage, SyncPage
 from .peer import Peer
+from .reasoning_types import (
+    FalsificationTrace,
+    Hypothesis,
+    HypothesisGenealogy,
+    Induction,
+    InductionSources,
+    Prediction,
+)
 from .session import Session
 from .session_context import SessionContext, SessionSummaries, Summary
 from .types import (
@@ -118,6 +126,13 @@ __all__ = [
     # Streaming
     "AsyncDialecticStreamResponse",
     "DialecticStreamResponse",
+    # Reasoning artifact types
+    "FalsificationTrace",
+    "Hypothesis",
+    "HypothesisGenealogy",
+    "Induction",
+    "InductionSources",
+    "Prediction",
     # Exceptions
     "APIError",
     "AuthenticationError",

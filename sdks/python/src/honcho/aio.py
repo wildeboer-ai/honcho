@@ -26,7 +26,7 @@ import logging
 import warnings
 from collections.abc import AsyncGenerator
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, ClassVar, Literal
+from typing import TYPE_CHECKING, Any, ClassVar, Literal, cast
 
 from pydantic import ConfigDict, Field, validate_call
 
@@ -52,6 +52,14 @@ from .http import routes
 from .message import Message
 from .mixins import AsyncMetadataConfigMixin
 from .pagination import AsyncPage
+from .reasoning_types import (
+    FalsificationTrace,
+    Hypothesis,
+    HypothesisGenealogy,
+    Induction,
+    InductionSources,
+    Prediction,
+)
 from .session_context import SessionContext, SessionSummaries, Summary
 from .types import AsyncDialecticStreamResponse
 from .utils import (
@@ -71,6 +79,16 @@ from .peer import Peer
 from .session import Session
 
 logger = logging.getLogger(__name__)
+
+
+def _page_items(data: Any) -> list[dict[str, Any]]:
+    if isinstance(data, dict):
+        page = cast(dict[str, Any], data)
+        items = page.get("items")
+        if isinstance(items, list):
+            return cast(list[dict[str, Any]], items)
+    return []
+
 
 __all__ = [
     "HonchoAio",
@@ -449,6 +467,7 @@ class HonchoAio(AsyncMetadataConfigMixin):
         observer: str | PeerBase,
         session: str | SessionBase | None = None,
         observed: str | PeerBase | None = None,
+        dream_type: Literal["omni", "introspection", "reasoning"] = "omni",
     ) -> None:
         """
         Schedule a dream task for memory consolidation asynchronously.
@@ -463,6 +482,7 @@ class HonchoAio(AsyncMetadataConfigMixin):
             session: Optional session (ID string or Session object) to scope the dream to.
             observed: Optional observed peer (ID string or Peer object). If not provided,
                 defaults to the observer (self-reflection).
+            dream_type: Dream type to schedule.
         """
         await self._honcho._ensure_workspace_async()
         resolved_observer_id = resolve_id(observer)
@@ -477,8 +497,205 @@ class HonchoAio(AsyncMetadataConfigMixin):
                 "observer": resolved_observer_id,
                 "observed": resolved_observed_id,
                 "session_id": resolved_session_id,
-                "dream_type": "omni",
+                "dream_type": dream_type,
             },
+        )
+
+    async def get_hypotheses(
+        self,
+        *,
+        observer: str | None = None,
+        observed: str | None = None,
+        status: Literal["active", "superseded", "falsified"] | None = None,
+        tier: int | None = None,
+    ) -> list[Hypothesis]:
+        """List top-down hypotheses in the current workspace asynchronously."""
+        await self._honcho._ensure_workspace_async()
+        query: dict[str, Any] = {}
+        if observer:
+            query["observer"] = observer
+        if observed:
+            query["observed"] = observed
+        if status:
+            query["status"] = status
+        if tier is not None:
+            query["tier"] = tier
+
+        data = await self._honcho._async_http_client.get(
+            routes.hypotheses(self._honcho.workspace_id),
+            query=query if query else None,
+        )
+        return cast(list[Hypothesis], _page_items(data))
+
+    async def get_hypothesis(self, hypothesis_id: str) -> Hypothesis:
+        """Get a top-down hypothesis by ID asynchronously."""
+        await self._honcho._ensure_workspace_async()
+        return cast(
+            Hypothesis,
+            await self._honcho._async_http_client.get(
+                routes.hypothesis(self._honcho.workspace_id, hypothesis_id)
+            ),
+        )
+
+    async def get_hypothesis_predictions(
+        self,
+        hypothesis_id: str,
+        *,
+        status: Literal["untested", "unfalsified", "falsified"] | None = None,
+    ) -> list[Prediction]:
+        """List predictions generated from a hypothesis asynchronously."""
+        await self._honcho._ensure_workspace_async()
+        query = {"status": status} if status else None
+        data = await self._honcho._async_http_client.get(
+            routes.hypothesis_predictions(self._honcho.workspace_id, hypothesis_id),
+            query=query,
+        )
+        return cast(list[Prediction], _page_items(data))
+
+    async def get_hypothesis_genealogy(self, hypothesis_id: str) -> HypothesisGenealogy:
+        """Get parent/child evolution metadata for a hypothesis asynchronously."""
+        await self._honcho._ensure_workspace_async()
+        return cast(
+            HypothesisGenealogy,
+            await self._honcho._async_http_client.get(
+                routes.hypothesis_genealogy(self._honcho.workspace_id, hypothesis_id)
+            ),
+        )
+
+    async def get_predictions(
+        self,
+        *,
+        hypothesis_id: str | None = None,
+        status: Literal["untested", "unfalsified", "falsified"] | None = None,
+        is_blind: bool | None = None,
+    ) -> list[Prediction]:
+        """List top-down predictions in the current workspace asynchronously."""
+        await self._honcho._ensure_workspace_async()
+        query: dict[str, Any] = {}
+        if hypothesis_id:
+            query["hypothesis_id"] = hypothesis_id
+        if status:
+            query["status"] = status
+        if is_blind is not None:
+            query["is_blind"] = is_blind
+
+        data = await self._honcho._async_http_client.get(
+            routes.predictions(self._honcho.workspace_id),
+            query=query if query else None,
+        )
+        return cast(list[Prediction], _page_items(data))
+
+    async def get_prediction(self, prediction_id: str) -> Prediction:
+        """Get a top-down prediction by ID asynchronously."""
+        await self._honcho._ensure_workspace_async()
+        return cast(
+            Prediction,
+            await self._honcho._async_http_client.get(
+                routes.prediction(self._honcho.workspace_id, prediction_id)
+            ),
+        )
+
+    async def search_predictions(
+        self,
+        query: str,
+        *,
+        hypothesis_id: str | None = None,
+    ) -> list[Prediction]:
+        """Search top-down predictions by semantic similarity asynchronously."""
+        await self._honcho._ensure_workspace_async()
+        body: dict[str, Any] = {"query": query}
+        if hypothesis_id:
+            body["hypothesis_id"] = hypothesis_id
+        data = await self._honcho._async_http_client.post(
+            routes.predictions_search(self._honcho.workspace_id),
+            body=body,
+        )
+        return cast(list[Prediction], data if isinstance(data, list) else [])
+
+    async def get_prediction_traces(
+        self, prediction_id: str
+    ) -> list[FalsificationTrace]:
+        """List falsification traces for a prediction asynchronously."""
+        await self._honcho._ensure_workspace_async()
+        data = await self._honcho._async_http_client.get(
+            routes.prediction_traces(self._honcho.workspace_id, prediction_id)
+        )
+        return cast(list[FalsificationTrace], _page_items(data))
+
+    async def get_traces(
+        self,
+        *,
+        prediction_id: str | None = None,
+        final_status: Literal["untested", "unfalsified", "falsified"] | None = None,
+    ) -> list[FalsificationTrace]:
+        """List falsification traces in the current workspace asynchronously."""
+        await self._honcho._ensure_workspace_async()
+        query: dict[str, Any] = {}
+        if prediction_id:
+            query["prediction_id"] = prediction_id
+        if final_status:
+            query["final_status"] = final_status
+
+        data = await self._honcho._async_http_client.get(
+            routes.traces(self._honcho.workspace_id),
+            query=query if query else None,
+        )
+        return cast(list[FalsificationTrace], _page_items(data))
+
+    async def get_trace(self, trace_id: str) -> FalsificationTrace:
+        """Get a falsification trace by ID asynchronously."""
+        await self._honcho._ensure_workspace_async()
+        return cast(
+            FalsificationTrace,
+            await self._honcho._async_http_client.get(
+                routes.trace(self._honcho.workspace_id, trace_id)
+            ),
+        )
+
+    async def get_inductions(
+        self,
+        *,
+        observer: str | None = None,
+        observed: str | None = None,
+        pattern_type: str | None = None,
+        confidence: Literal["high", "medium", "low"] | None = None,
+    ) -> list[Induction]:
+        """List top-down induction patterns in the current workspace asynchronously."""
+        await self._honcho._ensure_workspace_async()
+        query: dict[str, Any] = {}
+        if observer:
+            query["observer"] = observer
+        if observed:
+            query["observed"] = observed
+        if pattern_type:
+            query["pattern_type"] = pattern_type
+        if confidence:
+            query["confidence"] = confidence
+
+        data = await self._honcho._async_http_client.get(
+            routes.inductions(self._honcho.workspace_id),
+            query=query if query else None,
+        )
+        return cast(list[Induction], _page_items(data))
+
+    async def get_induction(self, induction_id: str) -> Induction:
+        """Get a top-down induction by ID asynchronously."""
+        await self._honcho._ensure_workspace_async()
+        return cast(
+            Induction,
+            await self._honcho._async_http_client.get(
+                routes.induction(self._honcho.workspace_id, induction_id)
+            ),
+        )
+
+    async def get_induction_sources(self, induction_id: str) -> InductionSources:
+        """Get the source predictions and premises behind an induction asynchronously."""
+        await self._honcho._ensure_workspace_async()
+        return cast(
+            InductionSources,
+            await self._honcho._async_http_client.get(
+                routes.induction_sources(self._honcho.workspace_id, induction_id)
+            ),
         )
 
     @validate_call(config=ConfigDict(arbitrary_types_allowed=True))
@@ -899,6 +1116,38 @@ class PeerAio(AsyncMetadataConfigMixin):
             query=query if query else None,
         )
         return PeerContextResponse.model_validate(data)
+
+    async def get_hypotheses(
+        self,
+        *,
+        target: str | PeerBase | None = None,
+        status: Literal["active", "superseded", "falsified"] | None = None,
+        tier: int | None = None,
+    ) -> list[Hypothesis]:
+        """List hypotheses where this peer is the observer asynchronously."""
+        target_id = resolve_id(target) if target is not None else self._peer.id
+        return await self._peer._honcho.aio.get_hypotheses(
+            observer=self._peer.id,
+            observed=target_id,
+            status=status,
+            tier=tier,
+        )
+
+    async def get_inductions(
+        self,
+        *,
+        target: str | PeerBase | None = None,
+        pattern_type: str | None = None,
+        confidence: Literal["high", "medium", "low"] | None = None,
+    ) -> list[Induction]:
+        """List induction patterns where this peer is the observer asynchronously."""
+        target_id = resolve_id(target) if target is not None else self._peer.id
+        return await self._peer._honcho.aio.get_inductions(
+            observer=self._peer.id,
+            observed=target_id,
+            pattern_type=pattern_type,
+            confidence=confidence,
+        )
 
 
 class SessionAio(AsyncMetadataConfigMixin):

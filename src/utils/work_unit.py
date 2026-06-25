@@ -56,6 +56,34 @@ def construct_work_unit_key(
             return f"{task_type}:{workspace_name}:{session_name}:{observed}"
         return f"{task_type}:{workspace_name}:{session_name}:{observer}:{observed}"
 
+    if task_type == "hypothesis_generation":
+        observer = payload.get("observer")
+        observed = payload.get("observed")
+        if not observer or not observed:
+            raise ValueError(
+                "observer and observed are required for hypothesis generation tasks"
+            )
+        return f"{task_type}:{workspace_name}:{observer}:{observed}"
+
+    if task_type == "prediction_testing":
+        hypothesis_id = payload.get("hypothesis_id")
+        if not hypothesis_id:
+            raise ValueError("hypothesis_id is required for prediction testing tasks")
+        return f"{task_type}:{workspace_name}:{hypothesis_id}"
+
+    if task_type == "falsification":
+        prediction_id = payload.get("prediction_id")
+        if not prediction_id:
+            raise ValueError("prediction_id is required for falsification tasks")
+        return f"{task_type}:{workspace_name}:{prediction_id}"
+
+    if task_type == "induction":
+        observer = payload.get("observer")
+        observed = payload.get("observed")
+        if not observer or not observed:
+            raise ValueError("observer and observed are required for induction tasks")
+        return f"{task_type}:{workspace_name}:{observer}:{observed}"
+
     if task_type == "webhook":
         return f"webhook:{workspace_name}"
 
@@ -146,6 +174,32 @@ def parse_work_unit_key(work_unit_key: str) -> ParsedWorkUnit:
 
     if task_type == "webhook":
         if len(parts) != 2:
+            raise ValueError(
+                f"Invalid work_unit_key format for task_type {task_type}: {work_unit_key}"
+            )
+        return ParsedWorkUnit(
+            task_type=task_type,
+            workspace_name=parts[1],
+            session_name=None,
+            observer=None,
+            observed=None,
+        )
+
+    if task_type in {"hypothesis_generation", "induction"}:
+        if len(parts) != 4:
+            raise ValueError(
+                f"Invalid work_unit_key format for task_type {task_type}: {work_unit_key}"
+            )
+        return ParsedWorkUnit(
+            task_type=task_type,
+            workspace_name=parts[1],
+            session_name=None,
+            observer=parts[2],
+            observed=parts[3],
+        )
+
+    if task_type in {"prediction_testing", "falsification"}:
+        if len(parts) != 3:
             raise ValueError(
                 f"Invalid work_unit_key format for task_type {task_type}: {work_unit_key}"
             )

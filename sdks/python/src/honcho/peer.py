@@ -28,6 +28,7 @@ from .http import routes
 from .message import Message
 from .mixins import MetadataConfigMixin
 from .pagination import SyncPage
+from .reasoning_types import Hypothesis, Induction
 from .types import DialecticStreamResponse
 from .utils import parse_datetime, parse_sse_stream, resolve_id
 
@@ -760,6 +761,38 @@ class Peer(PeerBase, MetadataConfigMixin):
         """
         target_id = target.id if isinstance(target, PeerBase) else target
         return ConclusionScope(self._honcho, self.workspace_id, self.id, target_id)
+
+    def get_hypotheses(
+        self,
+        *,
+        target: str | PeerBase | None = None,
+        status: Literal["active", "superseded", "falsified"] | None = None,
+        tier: int | None = None,
+    ) -> list[Hypothesis]:
+        """List hypotheses where this peer is the observer."""
+        target_id = resolve_id(target) if target is not None else self.id
+        return self._honcho.get_hypotheses(
+            observer=self.id,
+            observed=target_id,
+            status=status,
+            tier=tier,
+        )
+
+    def get_inductions(
+        self,
+        *,
+        target: str | PeerBase | None = None,
+        pattern_type: str | None = None,
+        confidence: Literal["high", "medium", "low"] | None = None,
+    ) -> list[Induction]:
+        """List induction patterns where this peer is the observer."""
+        target_id = resolve_id(target) if target is not None else self.id
+        return self._honcho.get_inductions(
+            observer=self.id,
+            observed=target_id,
+            pattern_type=pattern_type,
+            confidence=confidence,
+        )
 
     def __repr__(self) -> str:
         """

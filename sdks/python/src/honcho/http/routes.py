@@ -140,3 +140,63 @@ def conclusions_query(workspace_id: str) -> str:
 
 def conclusion(workspace_id: str, conclusion_id: str) -> str:
     return f"/{API_VERSION}/workspaces/{workspace_id}/conclusions/{conclusion_id}"
+
+
+# Reasoning artifact routes
+def hypotheses(workspace_id: str) -> str:
+    return f"/{API_VERSION}/workspaces/{workspace_id}/hypotheses"
+
+
+def hypothesis(workspace_id: str, hypothesis_id: str) -> str:
+    return f"/{API_VERSION}/workspaces/{workspace_id}/hypotheses/{hypothesis_id}"
+
+
+def hypothesis_predictions(workspace_id: str, hypothesis_id: str) -> str:
+    return (
+        f"/{API_VERSION}/workspaces/{workspace_id}/hypotheses"
+        f"/{hypothesis_id}/predictions"
+    )
+
+
+def hypothesis_genealogy(workspace_id: str, hypothesis_id: str) -> str:
+    return (
+        f"/{API_VERSION}/workspaces/{workspace_id}/hypotheses/{hypothesis_id}/genealogy"
+    )
+
+
+def predictions(workspace_id: str) -> str:
+    return f"/{API_VERSION}/workspaces/{workspace_id}/predictions"
+
+
+def prediction(workspace_id: str, prediction_id: str) -> str:
+    return f"/{API_VERSION}/workspaces/{workspace_id}/predictions/{prediction_id}"
+
+
+def predictions_search(workspace_id: str) -> str:
+    return f"/{API_VERSION}/workspaces/{workspace_id}/predictions/search"
+
+
+def prediction_traces(workspace_id: str, prediction_id: str) -> str:
+    return (
+        f"/{API_VERSION}/workspaces/{workspace_id}/predictions/{prediction_id}/traces"
+    )
+
+
+def traces(workspace_id: str) -> str:
+    return f"/{API_VERSION}/workspaces/{workspace_id}/traces"
+
+
+def trace(workspace_id: str, trace_id: str) -> str:
+    return f"/{API_VERSION}/workspaces/{workspace_id}/traces/{trace_id}"
+
+
+def inductions(workspace_id: str) -> str:
+    return f"/{API_VERSION}/workspaces/{workspace_id}/inductions"
+
+
+def induction(workspace_id: str, induction_id: str) -> str:
+    return f"/{API_VERSION}/workspaces/{workspace_id}/inductions/{induction_id}"
+
+
+def induction_sources(workspace_id: str, induction_id: str) -> str:
+    return f"/{API_VERSION}/workspaces/{workspace_id}/inductions/{induction_id}/sources"

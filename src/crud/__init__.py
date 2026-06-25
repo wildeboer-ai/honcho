@@ -1,3 +1,4 @@
+from . import hypothesis, induction, prediction, trace
 from .collection import (
     get_collection,
     get_or_create_collection,
@@ -91,6 +92,11 @@ from .workspace import (
 )
 
 __all__ = [
+    # CRUD modules
+    "hypothesis",
+    "induction",
+    "prediction",
+    "trace",
     # Collection
     "get_collection",
     "get_or_create_collection",
