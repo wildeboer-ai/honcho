@@ -25,11 +25,20 @@ uv tool install honcho-cli
 honcho init        # confirm/set apiKey + Honcho URL in ~/.honcho/config.json
 honcho doctor      # verify your config + connectivity
 honcho             # show banner + command list
+honcho-tui         # open the interactive terminal UI
 ```
 
 `honcho init` reads `apiKey` and `environmentUrl` from the top-level of `~/.honcho/config.json` (the same file other Honcho tools — plugins, host integrations — share). If both are present, it confirms them with you; if either is missing (or you decline), it prompts for the missing value(s) and writes them back. Host-specific entries under `hosts` are left untouched.
 
 Per-command scoping (workspace / peer / session) is handled via `-w` / `-p` / `-s` flags or `HONCHO_*` env vars — not persisted as CLI defaults.
+
+## TUI
+
+`honcho-tui` opens an interactive Textual interface using the same config and `HONCHO_*` environment variables as the CLI. It can browse sessions, inspect peer cards and conclusions, show queue state, and send dialectic queries for the scoped peer/session.
+
+```bash
+honcho-tui -w prod -p user
+```
 
 ## Commands
 
