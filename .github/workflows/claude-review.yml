@@ -20,16 +20,24 @@ jobs:
       pull-requests: write
       actions: read
       id-token: write
+    env:
+      REVIEW_ANTHROPIC_KEY: ${{ secrets.REVIEW_ANTHROPIC_KEY }}
     steps:
+      - name: Skip when review credentials are unavailable
+        if: ${{ env.REVIEW_ANTHROPIC_KEY == '' }}
+        run: echo "REVIEW_ANTHROPIC_KEY is not configured; skipping Claude review."
+
       - name: Checkout repository
+        if: ${{ env.REVIEW_ANTHROPIC_KEY != '' }}
         uses: actions/checkout@v6
         with:
           fetch-depth: 1
 
       - name: Review PR
+        if: ${{ env.REVIEW_ANTHROPIC_KEY != '' }}
         uses: anthropics/claude-code-action@v1
         with:
-          anthropic_api_key: ${{ secrets.REVIEW_ANTHROPIC_KEY }}
+          anthropic_api_key: ${{ env.REVIEW_ANTHROPIC_KEY }}
           prompt: /review
           claude_args: |
             --max-turns 10
@@ -45,16 +53,24 @@ jobs:
       pull-requests: write
       actions: read
       id-token: write
+    env:
+      REVIEW_ANTHROPIC_KEY: ${{ secrets.REVIEW_ANTHROPIC_KEY }}
     steps:
+      - name: Skip when review credentials are unavailable
+        if: ${{ env.REVIEW_ANTHROPIC_KEY == '' }}
+        run: echo "REVIEW_ANTHROPIC_KEY is not configured; skipping Claude response."
+
       - name: Checkout repository
+        if: ${{ env.REVIEW_ANTHROPIC_KEY != '' }}
         uses: actions/checkout@v6
         with:
           fetch-depth: 1
 
       - name: Run Claude Code
+        if: ${{ env.REVIEW_ANTHROPIC_KEY != '' }}
         uses: anthropics/claude-code-action@v1
         with:
-          anthropic_api_key: ${{ secrets.REVIEW_ANTHROPIC_KEY }}
+          anthropic_api_key: ${{ env.REVIEW_ANTHROPIC_KEY }}
           claude_args: |
             --max-turns 10
             --model claude-opus-4-5-20251101
