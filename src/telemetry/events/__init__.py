@@ -73,7 +73,10 @@ from src.telemetry.events.api import (
 )
 from src.telemetry.events.base import BaseEvent, generate_event_id
 from src.telemetry.events.deletion import DeletionCompletedEvent
-from src.telemetry.events.dialectic import DialecticCompletedEvent
+from src.telemetry.events.dialectic import (
+    DialecticCompletedEvent,
+    DialecticPhaseMetrics,
+)
 from src.telemetry.events.dream import (
     DreamRunEvent,
     DreamSpecialistEvent,
@@ -104,6 +107,7 @@ __all__ = [
     "DreamSpecialistEvent",
     # Dialectic events
     "DialecticCompletedEvent",
+    "DialecticPhaseMetrics",
     # Agent events
     "AgentIterationEvent",
     "AgentToolCallCompletedEvent",

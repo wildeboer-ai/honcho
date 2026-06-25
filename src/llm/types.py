@@ -103,6 +103,11 @@ class HonchoLLMCallResponse(BaseModel, Generic[T]):
     thinking_blocks: list[dict[str, Any]] = Field(default_factory=list)
     # OpenRouter reasoning_details for Gemini models — must be preserved across turns.
     reasoning_details: list[dict[str, Any]] = Field(default_factory=list)
+    # Full conversation history after a tool loop. This is empty for ordinary
+    # toolless calls. Dialectic two-phase synthesis uses it to pass the search
+    # transcript to a separate synthesis model without depending on provider
+    # internals.
+    messages: list[dict[str, Any]] = Field(default_factory=list)
     # True when the original input exceeded `max_input_tokens` — covers
     # both "messages were dropped" and "couldn't drop the last unit and
     # remaining tokens still exceeded the cap" (the deriver's prompt-only

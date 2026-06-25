@@ -859,7 +859,12 @@ REASONING_LEVELS: list[ReasoningLevel] = [
 
 
 class DialecticLevelSettings(BaseModel):
-    """Settings for a specific reasoning level in the dialectic."""
+    """Settings for a specific reasoning level in the dialectic.
+
+    By default one model handles both tool search and final synthesis. When
+    SYNTHESIS_MODEL_CONFIG is set, non-minimal dialectic runs use MODEL_CONFIG
+    for the tool-search phase and SYNTHESIS_MODEL_CONFIG for the final answer.
+    """
 
     model_config = SettingsConfigDict(populate_by_name=True)  # pyright: ignore
 
@@ -876,6 +881,17 @@ class DialecticLevelSettings(BaseModel):
     TOOL_CHOICE: Annotated[str | None, Field(validation_alias="tool_choice")] = (
         None  # None/auto lets model decide, "any"/"required" forces tool use
     )
+    SYNTHESIS_MODEL_CONFIG: Annotated[
+        ConfiguredModelSettings | None,
+        Field(
+            validation_alias=AliasChoices(
+                "synthesis_model_config",
+                "synthesis",
+                "SYNTHESIS_MODEL_CONFIG",
+                "SYNTHESIS",
+            )
+        ),
+    ] = None
 
     @model_validator(mode="after")
     def _validate_anthropic_thinking_budget(self) -> "DialecticLevelSettings":
@@ -890,6 +906,11 @@ class DialecticLevelSettings(BaseModel):
                 "MODEL_CONFIG.thinking_budget_tokens must be >= 1024 for "
                 + "Anthropic models when enabled "
                 + f"(got {self.MODEL_CONFIG.thinking_budget_tokens})"
+            )
+        if self.SYNTHESIS_MODEL_CONFIG is not None:
+            _validate_thinking_constraints(
+                self.SYNTHESIS_MODEL_CONFIG.transport,
+                self.SYNTHESIS_MODEL_CONFIG.thinking_budget_tokens,
             )
         return self
 
@@ -980,12 +1001,32 @@ class DialecticSettings(HonchoSettings):
                 # ("MODEL_CONFIG"), but TOML overrides arrive as lowercase
                 # ("model_config").  Check both casings in the override and
                 # resolve the base value from whichever casing is present.
-                for mc_key in ("MODEL_CONFIG", "model_config"):
+                for mc_key in (
+                    "MODEL_CONFIG",
+                    "model_config",
+                    "SYNTHESIS_MODEL_CONFIG",
+                    "synthesis_model_config",
+                    "SYNTHESIS",
+                    "synthesis",
+                ):
                     if mc_key in level_override and isinstance(
                         level_override[mc_key], dict
                     ):
+                        if mc_key in ("MODEL_CONFIG", "model_config"):
+                            base_model_config = base.get("MODEL_CONFIG") or base.get(
+                                "model_config"
+                            )
+                        else:
+                            base_model_config = (
+                                base.get("SYNTHESIS_MODEL_CONFIG")
+                                or base.get("synthesis_model_config")
+                                or base.get("SYNTHESIS")
+                                or base.get("synthesis")
+                            )
                         base_mc: dict[str, Any] = dict(
-                            base.get("MODEL_CONFIG") or base.get("model_config") or {}
+                            cast(dict[str, Any], base_model_config)
+                            if isinstance(base_model_config, dict)
+                            else {}
                         )
                         override_mc = cast(dict[str, Any], level_override[mc_key])
                         override_lower = {k.lower(): v for k, v in override_mc.items()}
@@ -1021,6 +1062,26 @@ class DialecticSettings(HonchoSettings):
                 raise ValueError(
                     "MAX_OUTPUT_TOKENS must be greater than MODEL_CONFIG."
                     + f"thinking_budget_tokens for level '{level}'"
+                )
+            synthesis_model_config = level_settings.SYNTHESIS_MODEL_CONFIG
+            if synthesis_model_config is None:
+                continue
+            synthesis_thinking_budget = (
+                synthesis_model_config.thinking_budget_tokens or 0
+            )
+            synthesis_effective_max = (
+                synthesis_model_config.max_output_tokens
+                if synthesis_model_config.max_output_tokens is not None
+                else self.MAX_OUTPUT_TOKENS
+            )
+            if (
+                synthesis_thinking_budget > 0
+                and synthesis_thinking_budget >= synthesis_effective_max
+            ):
+                raise ValueError(
+                    "MAX_OUTPUT_TOKENS must be greater than "
+                    + "SYNTHESIS_MODEL_CONFIG.thinking_budget_tokens "
+                    + f"for level '{level}'"
                 )
         return self
 

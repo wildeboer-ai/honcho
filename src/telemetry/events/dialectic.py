@@ -8,9 +8,30 @@ The run_id field enables correlation with agent.iteration events.
 
 from typing import ClassVar
 
-from pydantic import Field
+from pydantic import BaseModel, Field
 
 from src.telemetry.events.base import BaseEvent
+
+
+class DialecticPhaseMetrics(BaseModel):
+    """Per-phase token and tool metrics for dialectic runs."""
+
+    phase_name: str = Field(
+        ..., description="Phase identifier: 'single', 'search', or 'synthesis'"
+    )
+    transport: str | None = Field(default=None, description="LLM transport used")
+    model: str | None = Field(default=None, description="Model used")
+    input_tokens: int = Field(default=0, description="Input tokens for the phase")
+    output_tokens: int = Field(default=0, description="Output tokens for the phase")
+    cache_read_tokens: int = Field(default=0, description="Prompt-cache read tokens")
+    cache_creation_tokens: int = Field(
+        default=0, description="Prompt-cache creation tokens"
+    )
+    iterations: int = Field(default=1, description="LLM iterations in this phase")
+    tool_calls_count: int = Field(default=0, description="Tool calls in this phase")
+    hit_input_token_cap: bool = Field(
+        default=False, description="Whether this phase exceeded the input token cap"
+    )
 
 
 class DialecticCompletedEvent(BaseEvent):
@@ -46,6 +67,10 @@ class DialecticCompletedEvent(BaseEvent):
     reasoning_level: str = Field(
         ..., description="Reasoning level: minimal, low, medium, high, max"
     )
+    two_phase_mode: bool = Field(
+        default=False,
+        description="Whether search and synthesis used separate model calls",
+    )
 
     # Execution metrics
     total_iterations: int = Field(default=1, description="Number of LLM iterations")
@@ -76,10 +101,14 @@ class DialecticCompletedEvent(BaseEvent):
             "single-oversized-message case too, not just message-list shrinkage."
         ),
     )
+    phases: list[DialecticPhaseMetrics] = Field(
+        default_factory=list,
+        description="Optional per-phase metrics for two-phase dialectic runs",
+    )
 
     def get_resource_id(self) -> str:
         """Resource ID is the run_id for uniqueness."""
         return self.run_id
 
 
-__all__ = ["DialecticCompletedEvent"]
+__all__ = ["DialecticCompletedEvent", "DialecticPhaseMetrics"]

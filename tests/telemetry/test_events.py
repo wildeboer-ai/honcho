@@ -28,7 +28,10 @@ from src.telemetry.events.api import (
 )
 from src.telemetry.events.base import BaseEvent, generate_event_id
 from src.telemetry.events.deletion import DeletionCompletedEvent
-from src.telemetry.events.dialectic import DialecticCompletedEvent
+from src.telemetry.events.dialectic import (
+    DialecticCompletedEvent,
+    DialecticPhaseMetrics,
+)
 from src.telemetry.events.dream import DreamRunEvent, DreamSpecialistEvent
 from src.telemetry.events.llm import CallPurpose, LLMCallCompletedEvent
 from src.telemetry.events.reconciliation import (
@@ -596,6 +599,42 @@ class TestDialecticCompletedEvent:
         )
         assert event.cache_read_tokens == 0
         assert event.cache_creation_tokens == 0
+
+    def test_two_phase_metrics(self, fixed_timestamp: datetime):
+        event = DialecticCompletedEvent(
+            timestamp=fixed_timestamp,
+            run_id="test123",
+            workspace_name="test",
+            peer_name="user",
+            reasoning_level="max",
+            two_phase_mode=True,
+            total_duration_ms=1000.0,
+            input_tokens=1500,
+            output_tokens=250,
+            phases=[
+                DialecticPhaseMetrics(
+                    phase_name="search",
+                    transport="openai",
+                    model="gpt-5.4-mini",
+                    input_tokens=1000,
+                    output_tokens=100,
+                    iterations=2,
+                    tool_calls_count=1,
+                ),
+                DialecticPhaseMetrics(
+                    phase_name="synthesis",
+                    transport="anthropic",
+                    model="claude-opus-4-5",
+                    input_tokens=500,
+                    output_tokens=150,
+                ),
+            ],
+        )
+
+        assert event.two_phase_mode is True
+        assert len(event.phases) == 2
+        assert event.phases[0].phase_name == "search"
+        assert event.phases[1].tool_calls_count == 0
 
 
 # =============================================================================

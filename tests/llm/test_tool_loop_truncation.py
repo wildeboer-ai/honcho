@@ -148,6 +148,51 @@ async def test_hit_input_token_cap_false_when_under_cap():
 
 
 @pytest.mark.asyncio
+async def test_tool_loop_response_carries_conversation_messages():
+    with (
+        patch.object(tool_loop, "honcho_llm_call_inner", new=_terminating_call),
+        patch("src.llm.conversation.count_message_tokens", return_value=50),
+        patch(
+            "src.llm.conversation.truncate_messages_to_fit",
+            side_effect=lambda msgs, _cap: msgs,
+        ),
+    ):
+        result = await execute_tool_loop(
+            prompt="hi",
+            max_tokens=64,
+            messages=[{"role": "user", "content": "small"}],
+            tools=[
+                {
+                    "name": "noop",
+                    "description": "no-op",
+                    "input_schema": {"type": "object"},
+                }
+            ],
+            tool_choice="auto",
+            tool_executor=lambda _name, _input: "",
+            max_tool_iterations=5,
+            response_model=None,
+            json_mode=False,
+            temperature=None,
+            stop_seqs=None,
+            verbosity=None,
+            enable_retry=False,
+            retry_attempts=1,
+            max_input_tokens=100,
+            get_attempt_plan=_make_plan,
+            before_retry_callback=lambda _r: None,
+            stream_final=False,
+            telemetry=None,
+        )
+
+    assert isinstance(result, HonchoLLMCallResponse)
+    assert result.messages == [
+        {"role": "user", "content": "small"},
+        {"role": "assistant", "content": "done"},
+    ]
+
+
+@pytest.mark.asyncio
 async def test_hit_input_token_cap_fires_even_when_truncate_cant_shrink():
     """Critical regression: the single-message over-cap case (deriver's
     prompt-only call) used to silently return hit=False because
