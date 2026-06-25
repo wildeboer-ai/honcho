@@ -18,6 +18,7 @@ class DreamType(str, Enum):
 
     OMNI = "omni"
     INTROSPECTION = "introspection"
+    REASONING = "reasoning"
 
 
 class ReasoningConfiguration(BaseModel):
@@ -84,6 +85,136 @@ class DreamConfiguration(BaseModel):
     )
 
 
+class AbducerConfig(BaseModel):
+    """Configuration for the top-down abducer agent."""
+
+    max_hypotheses_per_cycle: int | None = Field(
+        default=5,
+        ge=1,
+        le=20,
+        description="Maximum number of hypotheses to generate per cycle.",
+    )
+    min_confidence_threshold: float | None = Field(
+        default=0.3,
+        ge=0.0,
+        le=1.0,
+        description="Minimum confidence for hypothesis acceptance.",
+    )
+    max_source_premises: int | None = Field(
+        default=10,
+        ge=1,
+        description="Maximum number of source premises to consider.",
+    )
+
+
+class PredictorConfig(BaseModel):
+    """Configuration for the top-down predictor agent."""
+
+    predictions_per_hypothesis: int | None = Field(
+        default=3,
+        ge=1,
+        le=10,
+        description="Number of predictions to generate per hypothesis.",
+    )
+    blind_prediction_ratio: float | None = Field(
+        default=0.7,
+        ge=0.0,
+        le=1.0,
+        description="Ratio of blind predictions.",
+    )
+
+
+class FalsifierConfig(BaseModel):
+    """Configuration for the top-down falsifier agent."""
+
+    max_searches_per_prediction: int | None = Field(
+        default=7,
+        ge=1,
+        le=20,
+        description="Maximum search attempts per prediction.",
+    )
+    search_cache_ttl: int | None = Field(
+        default=86400,
+        ge=0,
+        description="Search cache TTL in seconds.",
+    )
+    contradiction_threshold: float | None = Field(
+        default=0.8,
+        ge=0.0,
+        le=1.0,
+        description="Similarity threshold for contradiction detection.",
+    )
+
+
+class InductorConfig(BaseModel):
+    """Configuration for the top-down inductor agent."""
+
+    min_predictions_for_induction: int | None = Field(
+        default=3,
+        ge=2,
+        description="Minimum unfalsified predictions required for induction.",
+    )
+    pattern_confidence_threshold: float | None = Field(
+        default=0.6,
+        ge=0.0,
+        le=1.0,
+        description="Minimum confidence threshold for pattern acceptance.",
+    )
+    max_inductions_per_cycle: int | None = Field(
+        default=5,
+        ge=1,
+        le=20,
+        description="Maximum number of inductions per cycle.",
+    )
+
+
+class TopDownConfiguration(BaseModel):
+    """Configuration for top-down reasoning artifacts and agents."""
+
+    enabled: bool | None = Field(
+        default=False,
+        description="Whether to enable top-down reasoning functionality.",
+    )
+    unaccounted_threshold: int | None = Field(
+        default=50,
+        ge=1,
+        description="Number of unaccounted premises that triggers hypothesis generation.",
+    )
+    surprise_threshold: float | None = Field(
+        default=0.5,
+        ge=0.0,
+        le=1.0,
+        description="Surprise score threshold that triggers hypothesis generation.",
+    )
+    max_active_hypotheses: int | None = Field(
+        default=100,
+        ge=1,
+        description="Maximum number of active hypotheses to maintain.",
+    )
+    max_unaccounted_ratio: float | None = Field(
+        default=0.3,
+        ge=0.0,
+        le=1.0,
+        description="Maximum ratio of unaccounted premises before a hypothesis cycle.",
+    )
+    abducer_config: AbducerConfig | None = Field(
+        default_factory=AbducerConfig,
+        description="Configuration for the abducer agent.",
+    )
+    predictor_config: PredictorConfig | None = Field(
+        default_factory=PredictorConfig,
+        description="Configuration for the predictor agent.",
+    )
+    falsifier_config: FalsifierConfig | None = Field(
+        default_factory=FalsifierConfig,
+        description="Configuration for the falsifier agent.",
+    )
+    inductor_config: InductorConfig | None = Field(
+        default_factory=InductorConfig,
+        description="Configuration for the inductor agent.",
+    )
+
+
 def _validate_custom_instructions_budget(
     custom_instructions: str | None,
 ) -> str | None:
@@ -128,6 +259,10 @@ class WorkspaceConfiguration(BaseModel):
     dream: DreamConfiguration | None = Field(
         default=None,
         description="Configuration for dream functionality. If reasoning is disabled, dreams will also be disabled and these settings will be ignored.",
+    )
+    topdown: TopDownConfiguration | None = Field(
+        default=None,
+        description="Configuration for top-down reasoning functionality.",
     )
 
 

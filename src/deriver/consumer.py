@@ -134,6 +134,23 @@ async def process_item(queue_item: models.QueueItem) -> None:
                 raise ValueError(f"Invalid payload structure: {str(e)}") from e
             await process_dream(validated, workspace_name)
 
+    elif task_type in {
+        "hypothesis_generation",
+        "prediction_testing",
+        "falsification",
+        "induction",
+    }:
+        with sentry_sdk.start_transaction(name=f"process_{task_type}", op="deriver"):
+            from src.agents.topdown.processor import process_topdown_task
+
+            async with tracked_db(operation_name=f"topdown_{task_type}") as db:
+                await process_topdown_task(
+                    db,
+                    task_type,
+                    queue_payload,
+                    queue_item.id,
+                )
+
     elif task_type == "deletion":
         with sentry_sdk.start_transaction(name="process_deletion_task", op="deriver"):
             try:

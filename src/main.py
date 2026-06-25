@@ -24,10 +24,14 @@ from src.dev_tools import setup_dev_tools
 from src.exceptions import HonchoException
 from src.routers import (
     conclusions,
+    hypotheses,
+    inductions,
     keys,
     messages,
     peers,
+    predictions,
     sessions,
+    traces,
     webhooks,
     workspaces,
 )
@@ -202,6 +206,10 @@ app.include_router(peers.router, prefix="/v3")
 app.include_router(sessions.router, prefix="/v3")
 app.include_router(messages.router, prefix="/v3")
 app.include_router(conclusions.router, prefix="/v3")
+app.include_router(hypotheses.router, prefix="/v3")
+app.include_router(predictions.router, prefix="/v3")
+app.include_router(traces.router, prefix="/v3")
+app.include_router(inductions.router, prefix="/v3")
 app.include_router(keys.router, prefix="/v3")
 app.include_router(webhooks.router, prefix="/v3")
 
