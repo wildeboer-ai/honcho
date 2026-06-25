@@ -1,7 +1,7 @@
 import logging
 import time
 
-from src import crud
+from src import crud, schemas
 from src.config import ConfiguredModelSettings, settings
 from src.crud.representation import RepresentationManager
 from src.dependencies import tracked_db
@@ -93,10 +93,17 @@ async def process_representation_tasks_batch(
     if message_level_configuration.reasoning.enabled is False:
         return
 
-    async with tracked_db("minimal_deriver.get_agent_config", read_only=True) as db:
-        agent_config = await crud.get_workspace_agent_config(
-            db, latest_message.workspace_name
+    try:
+        async with tracked_db("minimal_deriver.get_agent_config", read_only=True) as db:
+            agent_config = await crud.get_workspace_agent_config(
+                db, latest_message.workspace_name
+            )
+    except Exception as e:
+        logger.warning(
+            "Failed to load workspace agent config for deriver; using defaults: %s",
+            e,
         )
+        agent_config = schemas.WorkspaceAgentConfig()
 
     custom_instructions = _combine_custom_instructions(
         message_level_configuration.reasoning.custom_instructions,
