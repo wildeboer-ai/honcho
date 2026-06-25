@@ -356,3 +356,142 @@ class TestDeriverStatusEndpoint:
             responses.append(response.json())  # pyright: ignore
         # Check consistency
         assert all(r == responses[0] for r in responses)  # pyright: ignore
+
+
+@pytest.mark.asyncio
+class TestQueueWorkUnitsEndpoint:
+    """Test suite for the /queue/work-units endpoint."""
+
+    async def test_empty_workspace_returns_empty_work_units(
+        self,
+        client: TestClient,
+        sample_data: tuple[models.Workspace, models.Peer],
+    ):
+        workspace, _ = sample_data
+        response = client.get(f"/v3/workspaces/{workspace.name}/queue/work-units")
+        assert response.status_code == 200
+
+        body = response.json()
+        assert body["items"] == []
+        assert body["total"] == 0
+        assert body["next_page"] is None
+        assert body["previous_page"] is None
+        assert body["representation_batch_max_tokens"] > 0
+        assert "flush_enabled" in body
+
+    async def test_pending_representation_below_threshold_is_stalled(
+        self,
+        client: TestClient,
+        db_session: AsyncSession,
+        sample_data: tuple[models.Workspace, models.Peer],
+    ):
+        workspace, peer = sample_data
+        session = models.Session(workspace_name=workspace.name, name="wu_session")
+        db_session.add(session)
+        await db_session.commit()
+        await db_session.refresh(session)
+
+        payload = {
+            "observed": peer.name,
+            "observer": peer.name,
+            "task_type": "representation",
+            "workspace_name": workspace.name,
+            "session_name": session.name,
+        }
+        for _ in range(3):
+            db_session.add(
+                models.QueueItem(
+                    session_id=session.id,
+                    task_type="representation",
+                    work_unit_key=construct_work_unit_key(workspace.name, payload),
+                    payload=payload,
+                    processed=False,
+                    workspace_name=workspace.name,
+                )
+            )
+        await db_session.commit()
+
+        status_resp = client.get(f"/v3/workspaces/{workspace.name}/queue/status")
+        assert status_resp.status_code == 200
+        status_body = status_resp.json()
+        assert status_body["pending_work_units"] == 3
+        assert status_body["pending_stalled_work_units"] == 3
+        assert status_body["pending_ready_work_units"] == 0
+        assert (
+            status_body["pending_stalled_work_units"]
+            + status_body["pending_ready_work_units"]
+            == status_body["pending_work_units"]
+        )
+
+        wu_resp = client.get(f"/v3/workspaces/{workspace.name}/queue/work-units")
+        assert wu_resp.status_code == 200
+        wu_body = wu_resp.json()
+        assert len(wu_body["items"]) == 1
+        assert wu_body["total"] == 1
+
+        work_unit = wu_body["items"][0]
+        assert work_unit["task_type"] == "representation"
+        assert work_unit["pending_items"] == 3
+        assert work_unit["pending_tokens"] == 0
+        assert work_unit["hit_threshold"] is False
+        assert work_unit["in_progress"] is False
+        assert (
+            work_unit["tokens_until_threshold"]
+            == wu_body["representation_batch_max_tokens"]
+        )
+
+    async def test_cursor_pagination_navigation(
+        self,
+        client: TestClient,
+        db_session: AsyncSession,
+        sample_data: tuple[models.Workspace, models.Peer],
+    ):
+        workspace, peer = sample_data
+        sessions = [
+            models.Session(workspace_name=workspace.name, name=f"cursor_sess_{i}")
+            for i in range(3)
+        ]
+        db_session.add_all(sessions)
+        await db_session.commit()
+
+        for session in sessions:
+            await db_session.refresh(session)
+            payload = {
+                "observed": peer.name,
+                "observer": peer.name,
+                "task_type": "representation",
+                "workspace_name": workspace.name,
+                "session_name": session.name,
+            }
+            db_session.add(
+                models.QueueItem(
+                    session_id=session.id,
+                    task_type="representation",
+                    work_unit_key=construct_work_unit_key(workspace.name, payload),
+                    payload=payload,
+                    processed=False,
+                    workspace_name=workspace.name,
+                )
+            )
+        await db_session.commit()
+
+        page1 = client.get(
+            f"/v3/workspaces/{workspace.name}/queue/work-units",
+            params={"size": 2},
+        )
+        assert page1.status_code == 200
+        body1 = page1.json()
+        assert len(body1["items"]) == 2
+        assert body1["next_page"] is not None
+
+        page2 = client.get(
+            f"/v3/workspaces/{workspace.name}/queue/work-units",
+            params={"size": 2, "cursor": body1["next_page"]},
+        )
+        assert page2.status_code == 200
+        body2 = page2.json()
+        assert len(body2["items"]) == 1
+        assert body2["next_page"] is None
+
+        seen = {item["work_unit_key"] for item in body1["items"] + body2["items"]}
+        assert len(seen) == 3
