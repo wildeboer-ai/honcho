@@ -5,6 +5,7 @@ This agent uses tools to gather context from the memory system
 and synthesize responses to queries about a peer.
 """
 
+import json
 import logging
 import time
 from collections.abc import AsyncIterator, Callable
@@ -24,7 +25,12 @@ from src.llm import (
 )
 from src.llm.types import LLMTelemetryContext
 from src.telemetry import prometheus_metrics
-from src.telemetry.events import DialecticCompletedEvent, EmbeddingCallPurpose, emit
+from src.telemetry.events import (
+    DialecticCompletedEvent,
+    DialecticPhaseMetrics,
+    EmbeddingCallPurpose,
+    emit,
+)
 from src.telemetry.logging import (
     accumulate_metric,
     log_performance_metrics,
@@ -47,6 +53,31 @@ def _get_dialectic_level_model_config(
     reasoning_level: ReasoningLevel,
 ) -> ConfiguredModelSettings:
     return settings.DIALECTIC.LEVELS[reasoning_level].MODEL_CONFIG
+
+
+def _get_dialectic_synthesis_model_config(
+    reasoning_level: ReasoningLevel,
+) -> ConfiguredModelSettings | None:
+    if reasoning_level == "minimal":
+        return None
+    return settings.DIALECTIC.LEVELS[reasoning_level].SYNTHESIS_MODEL_CONFIG
+
+
+def _effective_level_max_tokens(reasoning_level: ReasoningLevel) -> int:
+    level_settings = settings.DIALECTIC.LEVELS[reasoning_level]
+    return (
+        level_settings.MAX_OUTPUT_TOKENS
+        if level_settings.MAX_OUTPUT_TOKENS is not None
+        else settings.DIALECTIC.MAX_OUTPUT_TOKENS
+    )
+
+
+def _effective_model_max_tokens(model_config: ConfiguredModelSettings) -> int:
+    return (
+        model_config.max_output_tokens
+        if model_config.max_output_tokens is not None
+        else settings.DIALECTIC.MAX_OUTPUT_TOKENS
+    )
 
 
 class DialecticAgent:
@@ -92,7 +123,7 @@ class DialecticAgent:
         self.reasoning_level: ReasoningLevel = reasoning_level
 
         # Initialize conversation history with system prompt
-        self.messages: list[dict[str, str]] = [
+        self.messages: list[dict[str, Any]] = [
             {
                 "role": "system",
                 "content": prompts.agent_system_prompt(
@@ -318,6 +349,181 @@ class DialecticAgent:
             peer_name=self.observed,
         )
 
+    def _stringify_tool_result_content(self, content: Any) -> str:
+        """Convert provider-specific tool result content into stable text."""
+        if content is None:
+            return ""
+        if isinstance(content, str):
+            return content
+
+        try:
+            if isinstance(content, list):
+                rendered_parts: list[str] = []
+                for item in cast(list[Any], content):
+                    if isinstance(item, dict):
+                        item_dict = cast(dict[str, Any], item)
+                    else:
+                        item_dict = None
+                    if item_dict is not None and item_dict.get("type") == "text":
+                        text = item_dict.get("text")
+                        if isinstance(text, str) and text:
+                            rendered_parts.append(text)
+                            continue
+                    rendered_parts.append(
+                        json.dumps(item, ensure_ascii=False, default=str)
+                    )
+                return "\n".join(part for part in rendered_parts if part)
+
+            if isinstance(content, dict):
+                return json.dumps(
+                    cast(dict[str, Any], content), ensure_ascii=False, default=str
+                )
+
+            return str(cast(object, content))
+        except Exception:
+            return str(cast(object, content))
+
+    def _build_synthesis_messages(
+        self,
+        search_messages: list[dict[str, Any]],
+        search_response_content: str,
+    ) -> list[dict[str, Any]]:
+        """Build a toolless synthesis prompt from the search transcript."""
+        system_content = ""
+        search_context_parts: list[str] = []
+
+        for msg in search_messages:
+            role = msg.get("role", "")
+            content = msg.get("content", "")
+
+            if role == "system":
+                if isinstance(content, str):
+                    system_content += content
+                elif isinstance(content, list):
+                    for block in cast(list[Any], content):
+                        if not isinstance(block, dict):
+                            continue
+                        block_dict = cast(dict[str, Any], block)
+                        if block_dict.get("type") == "text":
+                            text = block_dict.get("text")
+                            if isinstance(text, str):
+                                system_content += text
+                continue
+
+            if role == "user":
+                if isinstance(content, str) and content:
+                    search_context_parts.append(f"[USER]: {content}")
+                    continue
+                if isinstance(content, list):
+                    for block in cast(list[Any], content):
+                        if not isinstance(block, dict):
+                            continue
+                        block_dict = cast(dict[str, Any], block)
+                        block_type = block_dict.get("type")
+                        if block_type == "text":
+                            text = block_dict.get("text")
+                            if isinstance(text, str) and text:
+                                search_context_parts.append(f"[USER]: {text}")
+                        elif block_type == "tool_result":
+                            tool_id = str(block_dict.get("tool_use_id", "unknown"))
+                            result = self._stringify_tool_result_content(
+                                block_dict.get("content")
+                            )
+                            if result:
+                                search_context_parts.append(
+                                    f"[TOOL RESULT ({tool_id})]: {result}"
+                                )
+                    continue
+
+            if role == "assistant":
+                if isinstance(content, str) and content:
+                    search_context_parts.append(f"[ASSISTANT]: {content}")
+                elif isinstance(content, list):
+                    for block in cast(list[Any], content):
+                        if not isinstance(block, dict):
+                            continue
+                        block_dict = cast(dict[str, Any], block)
+                        block_type = block_dict.get("type")
+                        if block_type == "text":
+                            text = block_dict.get("text")
+                            if isinstance(text, str) and text:
+                                search_context_parts.append(f"[ASSISTANT]: {text}")
+                        elif block_type == "tool_use":
+                            name = str(block_dict.get("name", "unknown"))
+                            tool_input = block_dict.get("input", {})
+                            search_context_parts.append(
+                                f"[TOOL CALL: {name}]: "
+                                + json.dumps(tool_input, ensure_ascii=False)
+                            )
+
+                raw_tool_calls: list[Any] = cast(
+                    list[Any], msg.get("tool_calls", []) or []
+                )
+                for tool_call in raw_tool_calls:
+                    if not isinstance(tool_call, dict):
+                        continue
+                    tool_call_dict = cast(dict[str, Any], tool_call)
+                    function = tool_call_dict.get("function", {})
+                    if isinstance(function, dict):
+                        function_dict = cast(dict[str, Any], function)
+                        name = function_dict.get("name", "unknown")
+                        args = function_dict.get("arguments", "{}")
+                    else:
+                        name = tool_call_dict.get("name", "unknown")
+                        args = tool_call_dict.get("input", {})
+                    search_context_parts.append(f"[TOOL CALL: {name}]: {args}")
+                continue
+
+            if role == "tool":
+                tool_id = msg.get("tool_call_id", "unknown")
+                result = self._stringify_tool_result_content(content)
+                if result:
+                    search_context_parts.append(f"[TOOL RESULT ({tool_id})]: {result}")
+
+        if not search_context_parts and search_response_content:
+            search_context_parts.append(f"[SEARCH RESPONSE]: {search_response_content}")
+
+        messages_out: list[dict[str, Any]] = []
+        if system_content:
+            messages_out.append({"role": "system", "content": system_content})
+
+        search_context = "\n\n".join(search_context_parts)
+        messages_out.append(
+            {
+                "role": "user",
+                "content": (
+                    "The following is the search process used to gather "
+                    "information:\n\n"
+                    f"---\n{search_context}\n---\n\n"
+                    "Based on the information gathered above, provide your final "
+                    "response to the original query. Be direct, grounded, and "
+                    "helpful. Do not call tools."
+                ),
+            }
+        )
+        return messages_out
+
+    def _phase_metrics(
+        self,
+        phase_name: str,
+        model_config: ConfiguredModelSettings,
+        response: HonchoLLMCallResponse[str],
+        *,
+        tool_calls_count: int,
+    ) -> DialecticPhaseMetrics:
+        return DialecticPhaseMetrics(
+            phase_name=phase_name,
+            transport=model_config.transport,
+            model=model_config.model,
+            input_tokens=response.input_tokens,
+            output_tokens=response.output_tokens,
+            cache_read_tokens=response.cache_read_input_tokens or 0,
+            cache_creation_tokens=response.cache_creation_input_tokens or 0,
+            iterations=max(response.iterations, 1),
+            tool_calls_count=tool_calls_count,
+            hit_input_token_cap=response.hit_input_token_cap,
+        )
+
     def _log_response_metrics(
         self,
         task_name: str,
@@ -332,6 +538,8 @@ class DialecticAgent:
         thinking_content: str | None,
         iterations: int,
         hit_input_token_cap: bool = False,
+        two_phase_mode: bool = False,
+        phases: list[DialecticPhaseMetrics] | None = None,
     ) -> None:
         """
         Log metrics common to both streaming and non-streaming responses.
@@ -392,6 +600,7 @@ class DialecticAgent:
                 peer_name=self.observed,
                 session_name=self.session_name,
                 reasoning_level=self.reasoning_level,
+                two_phase_mode=two_phase_mode,
                 total_iterations=iterations,
                 prefetched_conclusion_count=self._prefetched_conclusion_count,
                 tool_calls_count=tool_calls_count,
@@ -401,6 +610,7 @@ class DialecticAgent:
                 cache_read_tokens=cache_read_input_tokens or 0,
                 cache_creation_tokens=cache_creation_input_tokens or 0,
                 hit_input_token_cap=hit_input_token_cap,
+                phases=phases or [],
             )
         )
 
@@ -423,6 +633,9 @@ class DialecticAgent:
 
         # Get level-specific settings
         level_settings = settings.DIALECTIC.LEVELS[self.reasoning_level]
+        synthesis_model_config = _get_dialectic_synthesis_model_config(
+            self.reasoning_level
+        )
 
         # Use minimal tools for minimal reasoning to reduce cost
         tools = (
@@ -430,12 +643,81 @@ class DialecticAgent:
             if self.reasoning_level == "minimal"
             else DIALECTIC_TOOLS
         )
-        # Use level-specific max_output_tokens if set, otherwise global default
-        max_tokens = (
-            level_settings.MAX_OUTPUT_TOKENS
-            if level_settings.MAX_OUTPUT_TOKENS is not None
-            else settings.DIALECTIC.MAX_OUTPUT_TOKENS
-        )
+
+        if synthesis_model_config is not None:
+            search_max_tokens = level_settings.MAX_OUTPUT_TOKENS or 1024
+            search_response: HonchoLLMCallResponse[str] = await honcho_llm_call(
+                model_config=_get_dialectic_level_model_config(self.reasoning_level),
+                prompt="",
+                max_tokens=search_max_tokens,
+                tools=tools,
+                tool_choice=level_settings.TOOL_CHOICE,
+                tool_executor=tool_executor,
+                max_tool_iterations=level_settings.MAX_TOOL_ITERATIONS,
+                messages=self.messages,
+                track_name="Dialectic Search",
+                max_input_tokens=settings.DIALECTIC.MAX_INPUT_TOKENS,
+                trace_name="dialectic_search",
+                telemetry=self._telemetry_context(),
+            )
+            synthesis_messages = self._build_synthesis_messages(
+                search_response.messages or self.messages,
+                search_response.content,
+            )
+            synthesis_response: HonchoLLMCallResponse[str] = await honcho_llm_call(
+                model_config=synthesis_model_config,
+                prompt="",
+                max_tokens=_effective_model_max_tokens(synthesis_model_config),
+                messages=synthesis_messages,
+                track_name="Dialectic Synthesis",
+                max_input_tokens=settings.DIALECTIC.MAX_INPUT_TOKENS,
+                trace_name="dialectic_synthesis",
+                telemetry=self._telemetry_context(),
+            )
+            phases = [
+                self._phase_metrics(
+                    "search",
+                    _get_dialectic_level_model_config(self.reasoning_level),
+                    search_response,
+                    tool_calls_count=len(search_response.tool_calls_made),
+                ),
+                self._phase_metrics(
+                    "synthesis",
+                    synthesis_model_config,
+                    synthesis_response,
+                    tool_calls_count=0,
+                ),
+            ]
+            self._log_response_metrics(
+                task_name=task_name,
+                run_id=run_id,
+                start_time=start_time,
+                response_content=synthesis_response.content,
+                input_tokens=search_response.input_tokens
+                + synthesis_response.input_tokens,
+                output_tokens=search_response.output_tokens
+                + synthesis_response.output_tokens,
+                cache_read_input_tokens=(
+                    (search_response.cache_read_input_tokens or 0)
+                    + (synthesis_response.cache_read_input_tokens or 0)
+                ),
+                cache_creation_input_tokens=(
+                    (search_response.cache_creation_input_tokens or 0)
+                    + (synthesis_response.cache_creation_input_tokens or 0)
+                ),
+                tool_calls_count=len(search_response.tool_calls_made),
+                thinking_content=synthesis_response.thinking_content,
+                iterations=search_response.iterations + 1,
+                hit_input_token_cap=(
+                    search_response.hit_input_token_cap
+                    or synthesis_response.hit_input_token_cap
+                ),
+                two_phase_mode=True,
+                phases=phases,
+            )
+            return synthesis_response.content
+
+        max_tokens = _effective_level_max_tokens(self.reasoning_level)
 
         response: HonchoLLMCallResponse[str] = await honcho_llm_call(
             model_config=_get_dialectic_level_model_config(self.reasoning_level),
@@ -488,6 +770,9 @@ class DialecticAgent:
 
         # Get level-specific settings
         level_settings = settings.DIALECTIC.LEVELS[self.reasoning_level]
+        synthesis_model_config = _get_dialectic_synthesis_model_config(
+            self.reasoning_level
+        )
 
         # Use minimal tools for minimal reasoning to reduce cost
         tools = (
@@ -495,12 +780,83 @@ class DialecticAgent:
             if self.reasoning_level == "minimal"
             else DIALECTIC_TOOLS
         )
-        # Use level-specific max_output_tokens if set, otherwise global default
-        max_tokens = (
-            level_settings.MAX_OUTPUT_TOKENS
-            if level_settings.MAX_OUTPUT_TOKENS is not None
-            else settings.DIALECTIC.MAX_OUTPUT_TOKENS
-        )
+
+        if synthesis_model_config is not None:
+            search_max_tokens = level_settings.MAX_OUTPUT_TOKENS or 1024
+            search_response: HonchoLLMCallResponse[str] = await honcho_llm_call(
+                model_config=_get_dialectic_level_model_config(self.reasoning_level),
+                prompt="",
+                max_tokens=search_max_tokens,
+                tools=tools,
+                tool_choice=level_settings.TOOL_CHOICE,
+                tool_executor=tool_executor,
+                max_tool_iterations=level_settings.MAX_TOOL_ITERATIONS,
+                messages=self.messages,
+                track_name="Dialectic Search Stream",
+                max_input_tokens=settings.DIALECTIC.MAX_INPUT_TOKENS,
+                trace_name="dialectic_search",
+                telemetry=self._telemetry_context(),
+            )
+            synthesis_messages = self._build_synthesis_messages(
+                search_response.messages or self.messages,
+                search_response.content,
+            )
+            synthesis_response: HonchoLLMCallResponse[str] = await honcho_llm_call(
+                model_config=synthesis_model_config,
+                prompt="",
+                max_tokens=_effective_model_max_tokens(synthesis_model_config),
+                messages=synthesis_messages,
+                track_name="Dialectic Synthesis Stream",
+                max_input_tokens=settings.DIALECTIC.MAX_INPUT_TOKENS,
+                trace_name="dialectic_synthesis",
+                telemetry=self._telemetry_context(),
+            )
+            phases = [
+                self._phase_metrics(
+                    "search",
+                    _get_dialectic_level_model_config(self.reasoning_level),
+                    search_response,
+                    tool_calls_count=len(search_response.tool_calls_made),
+                ),
+                self._phase_metrics(
+                    "synthesis",
+                    synthesis_model_config,
+                    synthesis_response,
+                    tool_calls_count=0,
+                ),
+            ]
+            self._log_response_metrics(
+                task_name=task_name,
+                run_id=run_id,
+                start_time=start_time,
+                response_content=synthesis_response.content,
+                input_tokens=search_response.input_tokens
+                + synthesis_response.input_tokens,
+                output_tokens=search_response.output_tokens
+                + synthesis_response.output_tokens,
+                cache_read_input_tokens=(
+                    (search_response.cache_read_input_tokens or 0)
+                    + (synthesis_response.cache_read_input_tokens or 0)
+                ),
+                cache_creation_input_tokens=(
+                    (search_response.cache_creation_input_tokens or 0)
+                    + (synthesis_response.cache_creation_input_tokens or 0)
+                ),
+                tool_calls_count=len(search_response.tool_calls_made),
+                thinking_content=synthesis_response.thinking_content,
+                iterations=search_response.iterations + 1,
+                hit_input_token_cap=(
+                    search_response.hit_input_token_cap
+                    or synthesis_response.hit_input_token_cap
+                ),
+                two_phase_mode=True,
+                phases=phases,
+            )
+            if synthesis_response.content:
+                yield synthesis_response.content
+            return
+
+        max_tokens = _effective_level_max_tokens(self.reasoning_level)
 
         response = cast(
             StreamingResponseWithMetadata,

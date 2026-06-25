@@ -198,6 +198,14 @@ MAX_TOOL_ITERATIONS = 10
 transport = "openai"
 model = "gpt-5.4-mini"
 
+# Optional two-phase dialectic: use model_config for tool-search and
+# synthesis_model_config for the final answer. Minimal always stays single-model.
+# [dialectic.levels.max.synthesis_model_config]
+# transport = "anthropic"
+# model = "claude-opus-4-5"
+# thinking_budget_tokens = 1024
+# max_output_tokens = 8192
+
 # [dialectic.levels.max.model_config.fallback]
 # transport = "gemini"
 # model = "gemini-2.5-pro"

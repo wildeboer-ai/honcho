@@ -187,6 +187,48 @@ def test_dialectic_level_settings_accepts_nested_model_config() -> None:
     assert resolved.fallback.transport == "gemini"
 
 
+def test_dialectic_level_settings_accepts_synthesis_model_config() -> None:
+    settings = DialecticLevelSettings.model_validate(
+        {
+            "model_config": {
+                "model": "gpt-5.4-mini",
+                "transport": "openai",
+            },
+            "synthesis_model_config": {
+                "model": "claude-opus-4-5",
+                "transport": "anthropic",
+                "thinking_budget_tokens": 1024,
+                "max_output_tokens": 4096,
+            },
+            "max_tool_iterations": 2,
+        }
+    )
+
+    assert settings.SYNTHESIS_MODEL_CONFIG is not None
+    assert settings.SYNTHESIS_MODEL_CONFIG.transport == "anthropic"
+    assert settings.SYNTHESIS_MODEL_CONFIG.model == "claude-opus-4-5"
+
+
+def test_dialectic_level_settings_accepts_legacy_synthesis_alias() -> None:
+    settings = DialecticLevelSettings.model_validate(
+        {
+            "model_config": {
+                "model": "gpt-5.4-mini",
+                "transport": "openai",
+            },
+            "synthesis": {
+                "model": "claude-haiku-4-5",
+                "transport": "anthropic",
+                "thinking_budget_tokens": 1024,
+            },
+            "max_tool_iterations": 2,
+        }
+    )
+
+    assert settings.SYNTHESIS_MODEL_CONFIG is not None
+    assert settings.SYNTHESIS_MODEL_CONFIG.model == "claude-haiku-4-5"
+
+
 def test_dialectic_level_settings_require_nested_model_config() -> None:
     with pytest.raises(ValueError, match="Field required"):
         DialecticLevelSettings.model_validate({"MAX_TOOL_ITERATIONS": 2})
@@ -324,6 +366,14 @@ def test_config_toml_example_uses_nested_model_config_sections() -> None:
     max_level = DialecticLevelSettings.model_validate(
         config_data["dialectic"]["levels"]["max"]
     )
+    max_synthesis_config = ConfiguredModelSettings.model_validate(
+        {
+            "transport": "anthropic",
+            "model": "claude-opus-4-5",
+            "thinking_budget_tokens": 1024,
+            "max_output_tokens": 8192,
+        }
+    )
     embedding_config = ConfiguredEmbeddingModelSettings.model_validate(
         config_data["embedding"]["model_config"]
     )
@@ -357,6 +407,8 @@ def test_config_toml_example_uses_nested_model_config_sections() -> None:
     assert max_level.MODEL_CONFIG.model == "gpt-5.4-mini"
     assert max_level.MODEL_CONFIG.transport == "openai"
     assert max_level.MODEL_CONFIG.thinking_budget_tokens is None
+    assert max_synthesis_config.transport == "anthropic"
+    assert max_synthesis_config.max_output_tokens == 8192
     assert embedding_config.transport == "openai"
     assert embedding_config.model == "text-embedding-3-small"
     assert summary_config.model == "gpt-5.4-mini"
@@ -375,6 +427,10 @@ def test_env_template_uses_nested_model_config_keys() -> None:
     assert "DIALECTIC_LEVELS__minimal__MODEL_CONFIG__MODEL" in env_template
     assert "DIALECTIC_LEVELS__minimal__TOOL_CHOICE=auto" in env_template
     assert "DIALECTIC_LEVELS__low__TOOL_CHOICE=auto" in env_template
+    assert (
+        "DIALECTIC_LEVELS__max__SYNTHESIS_MODEL_CONFIG__MODEL=claude-opus-4-5"
+        in env_template
+    )
     assert "SUMMARY_MODEL_CONFIG__MODEL" in env_template
     assert "DREAM_DEDUCTION_MODEL_CONFIG__MODEL" in env_template
 

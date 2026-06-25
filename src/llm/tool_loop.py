@@ -457,6 +457,10 @@ async def execute_tool_loop(
             response.cache_creation_input_tokens = total_cache_creation_tokens
             response.cache_read_input_tokens = total_cache_read_tokens
             response.iterations = iteration + 1
+            response.messages = [
+                *conversation_messages,
+                {"role": "assistant", "content": response.content},
+            ]
             response.hit_input_token_cap = (
                 response.hit_input_token_cap or hit_input_token_cap
             )
@@ -660,6 +664,10 @@ async def execute_tool_loop(
     final_response.cache_read_input_tokens = (
         total_cache_read_tokens + final_response.cache_read_input_tokens
     )
+    final_response.messages = [
+        *conversation_messages,
+        {"role": "assistant", "content": final_response.content},
+    ]
     final_response.hit_input_token_cap = (
         final_response.hit_input_token_cap or hit_input_token_cap
     )
