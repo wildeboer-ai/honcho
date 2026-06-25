@@ -29,7 +29,7 @@ jobs:
       actions: read
       contents: read
     outputs:
-      runner-ready: ${{ steps.wait-for-runner.outputs.ready }}
+      runner-ready: ${{ steps.wait-for-runner.outputs.ready || steps.fly-secrets.outputs.ready }}
       machine-id: ${{ steps.machine-management.outputs.machine-id }}
       runner-labels: ${{ steps.generate-labels.outputs.labels }}
       runner-name: ${{ steps.wait-for-runner.outputs.runner-name }}
@@ -45,11 +45,26 @@ jobs:
           echo "Generated unique labels: $UNIQUE_LABELS"
           echo "labels=$UNIQUE_LABELS" >> "$GITHUB_OUTPUT"
 
+      - name: Check Fly runner secrets
+        id: fly-secrets
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN_TESTING }}
+          GH_TOKEN_ACTIONS: ${{ secrets.GH_TOKEN_ACTIONS }}
+        run: |
+          if [ -z "$FLY_API_TOKEN" ] || [ -z "$GH_TOKEN_ACTIONS" ]; then
+            echo "Fly runner secrets are not configured; skipping external runner startup."
+            echo 'ready=false' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo 'ready=true' >> "$GITHUB_OUTPUT"
+
       - name: Setup Fly CLI
+        if: steps.fly-secrets.outputs.ready == 'true'
         uses: superfly/flyctl-actions/setup-flyctl@master
 
       - name: Get Fly app info
         id: get-app-info
+        if: steps.fly-secrets.outputs.ready == 'true'
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN_TESTING }}
         run: |
@@ -57,6 +72,7 @@ jobs:
           flyctl status -a "${FLY_RUNNER_APP}"
 
       - name: Set GH_TOKEN in Fly secrets
+        if: steps.fly-secrets.outputs.ready == 'true'
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN_TESTING }}
         run: |
@@ -65,6 +81,7 @@ jobs:
 
       - name: Create Fly machine
         id: machine-management
+        if: steps.fly-secrets.outputs.ready == 'true'
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN_TESTING }}
         run: |
@@ -85,6 +102,7 @@ jobs:
 
       - name: Wait for runner to be online
         id: wait-for-runner
+        if: steps.fly-secrets.outputs.ready == 'true'
         env:
           GITHUB_TOKEN: ${{ secrets.GH_TOKEN_ACTIONS }}
           MAX_WAIT: 420

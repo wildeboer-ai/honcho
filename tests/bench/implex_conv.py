@@ -29,16 +29,13 @@ from typing import Any, Literal, cast
 import tiktoken
 from anthropic import AsyncAnthropic
 from dotenv import load_dotenv
-from honcho import AsyncHoncho
-from honcho.async_client.session import SessionPeerConfig
-from honcho_core.types.workspaces.sessions.message_create_param import (
-    MessageCreateParam,
-)
+from honcho import Honcho, HonchoAio, MessageCreateParams
+from honcho.session import SessionPeerConfig
 from openai import AsyncOpenAI
 from typing_extensions import TypedDict
 
 from src.config import settings
-from src.utils.metrics_collector import MetricsCollector
+from src.telemetry.metrics_collector import MetricsCollector
 
 load_dotenv()
 
@@ -317,22 +314,22 @@ class ImplexConvRunner:
 
     async def create_honcho_client(
         self, workspace_id: str, honcho_url: str
-    ) -> AsyncHoncho:
+    ) -> HonchoAio:
         """Create a Honcho client for a specific workspace."""
-        return AsyncHoncho(
+        return Honcho(
             environment="local",
             workspace_id=workspace_id,
             base_url=honcho_url,
-        )
+        ).aio
 
     async def wait_for_deriver_queue_empty(
-        self, honcho_client: AsyncHoncho, session_id: str | None = None
+        self, honcho_client: HonchoAio, session_id: str | None = None
     ) -> bool:
         """Wait for the deriver queue to be empty."""
         start_time = time.time()
         while True:
             try:
-                status = await honcho_client.get_deriver_status(session_id=session_id)
+                status = await honcho_client.queue_status(session=session_id)
             except Exception:
                 await asyncio.sleep(1)
                 elapsed_time = time.time() - start_time
@@ -598,7 +595,7 @@ Evaluate whether the actual response correctly demonstrates implicit reasoning b
                 session = await honcho_client.session(id=f"conv_{conv_id}")
 
                 # Always observe the user (Speaker1) in ImplexConv
-                await session.add_peers(
+                await session.aio.add_peers(
                     [
                         (
                             user_peer,
@@ -615,7 +612,7 @@ Evaluate whether the actual response correctly demonstrates implicit reasoning b
                 messages = self._parse_conversation(conv_text)
 
                 # Convert to Honcho message format
-                honcho_messages: list[MessageCreateParam] = []
+                honcho_messages: list[MessageCreateParams] = []
                 for msg in messages:
                     if msg["role"] == "user":
                         honcho_messages.append(user_peer.message(msg["content"]))
@@ -626,7 +623,7 @@ Evaluate whether the actual response correctly demonstrates implicit reasoning b
                 if honcho_messages:
                     for i in range(0, len(honcho_messages), 100):
                         batch = honcho_messages[i : i + 100]
-                        await session.add_messages(batch)
+                        await session.aio.add_messages(batch)
 
                 results["sessions_created"].append(
                     SessionResult(
@@ -662,7 +659,7 @@ Evaluate whether the actual response correctly demonstrates implicit reasoning b
                     )
                 else:
                     # Use dialectic chat to get Honcho's context
-                    honcho_context_response = await user_peer.chat(question)
+                    honcho_context_response = await user_peer.aio.chat(question)
                     honcho_context = (
                         honcho_context_response
                         if isinstance(honcho_context_response, str)

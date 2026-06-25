@@ -344,7 +344,7 @@ class UnifiedTestExecutor:
         if assertion_failures:
             logger.error(
                 f"Test {test_name} FAILED with {len(assertion_failures)} "
-                f"assertion failure(s) (continue_on_failure=true):"
+                + "assertion failure(s) (continue_on_failure=true):"
             )
             for step_idx, step_type, desc, msg in assertion_failures:
                 logger.error(
@@ -515,7 +515,7 @@ class UnifiedTestExecutor:
             if not fixture_path.is_file():
                 raise FileNotFoundError(
                     f"Fixture not found: {fixture_path} (resolved from "
-                    f"fixture_path={step.fixture_path!r}, FIXTURES_DIR={FIXTURES_DIR})"
+                    + f"fixture_path={step.fixture_path!r}, FIXTURES_DIR={FIXTURES_DIR})"
                 )
             with open(fixture_path) as f:
                 fixture = json.load(f)
@@ -523,7 +523,7 @@ class UnifiedTestExecutor:
             if step.fixture_session_index >= len(sessions_in_fixture):
                 raise IndexError(
                     f"fixture_session_index={step.fixture_session_index} out of range "
-                    f"(fixture has {len(sessions_in_fixture)} sessions)"
+                    + f"(fixture has {len(sessions_in_fixture)} sessions)"
                 )
             fixture_session = sessions_in_fixture[step.fixture_session_index]
             fixture_messages = fixture_session.get("messages", [])
