@@ -67,6 +67,12 @@ OPENAI_API_KEY = "your-api-key-here"
 # ANTHROPIC_API_KEY = "your-api-key"
 # GEMINI_API_KEY = "your-api-key"
 
+# Audio transcription settings
+[audio]
+PROVIDER = "openai"
+MODEL = "whisper-1"
+MAX_FILE_SIZE_BYTES = 25000000  # 25MB
+
 # Embedding settings
 [embedding]
 VECTOR_DIMENSIONS = 1536

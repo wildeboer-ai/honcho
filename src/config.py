@@ -530,6 +530,7 @@ class TomlConfigSettingsSource(PydanticBaseSettingsSource):
         "CACHE": "cache",
         "LLM": "llm",
         "EMBEDDING": "embedding",
+        "AUDIO": "audio",
         "DERIVER": "deriver",
         "PEER_CARD": "peer_card",
         "DIALECTIC": "dialectic",
@@ -1293,6 +1294,14 @@ class VectorStoreSettings(HonchoSettings):
         return self
 
 
+class AudioSettings(HonchoSettings):
+    model_config = SettingsConfigDict(env_prefix="AUDIO_", extra="ignore")  # pyright: ignore
+
+    PROVIDER: Literal["openai"] = "openai"
+    MODEL: str = "whisper-1"
+    MAX_FILE_SIZE_BYTES: Annotated[int, Field(default=25_000_000, gt=0)] = 25_000_000
+
+
 class AppSettings(HonchoSettings):
     # No env_prefix for app-level settings
     model_config = SettingsConfigDict(  # pyright: ignore
@@ -1336,6 +1345,7 @@ class AppSettings(HonchoSettings):
     SENTRY: SentrySettings = Field(default_factory=SentrySettings)
     LLM: LLMSettings = Field(default_factory=LLMSettings)
     EMBEDDING: EmbeddingSettings = Field(default_factory=EmbeddingSettings)
+    AUDIO: AudioSettings = Field(default_factory=AudioSettings)
     DERIVER: DeriverSettings = Field(default_factory=DeriverSettings)
     DIALECTIC: DialecticSettings = Field(default_factory=DialecticSettings)
     PEER_CARD: PeerCardSettings = Field(default_factory=PeerCardSettings)

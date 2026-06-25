@@ -25,7 +25,12 @@ from src.reconciler.embed_now import embed_messages_now
 from src.security import require_auth
 from src.telemetry import prometheus_metrics
 from src.telemetry.events import FileUploadedEvent, MessageCreatedEvent, emit
-from src.utils.files import process_file_uploads_for_messages
+from src.utils.files import (
+    is_audio_transcription_enabled,
+    is_audio_upload,
+    is_validated_audio_upload,
+    process_file_uploads_for_messages,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -166,9 +171,20 @@ async def create_messages_with_file(
     """Create messages from uploaded files. Files are converted to text and split into multiple messages."""
 
     # Validate file size
-    if file.size and file.size > settings.MAX_FILE_SIZE:
+    max_file_size = settings.MAX_FILE_SIZE
+    if (
+        file.size
+        and file.size > settings.MAX_FILE_SIZE
+        and is_audio_transcription_enabled()
+        and is_audio_upload(file)
+        and file.size <= settings.AUDIO.MAX_FILE_SIZE_BYTES
+        and await is_validated_audio_upload(file)
+    ):
+        max_file_size = settings.AUDIO.MAX_FILE_SIZE_BYTES
+
+    if file.size and file.size > max_file_size:
         raise FileTooLargeError(
-            f"File size ({file.size} bytes) exceeds maximum allowed size ({settings.MAX_FILE_SIZE} bytes)",
+            f"File size ({file.size} bytes) exceeds maximum allowed size ({max_file_size} bytes)",
         )
 
     # Process files using shared utility function
