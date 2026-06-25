@@ -32,10 +32,12 @@ kept as the authoritative tree.
 - `vineeth/changelog-chore` contains old changelog formatting/content that is
   now included or superseded by the current changelog history.
 - `docs/paperclip-integration-refresh` was compared against the live
-  `plastic-labs/paperclip-honcho` plugin on 2026-06-25. Current Honcho docs
-  match the plugin's current config names (`honchoApiKey`, `observe_me`,
-  `observe_others`) and action label (`Initialize Honcho memory`), while the
-  branch would reintroduce legacy/camel-case aliases into the public guide.
+  `plastic-labs/paperclip-honcho` plugin on 2026-06-25. This PR selectively
+  refreshes `docs/v3/guides/integrations/paperclip.mdx` to match the live
+  plugin's current setup flow and operator actions while keeping the current
+  public config names (`honchoApiKey`, `observe_me`, `observe_others`) and
+  action label (`Initialize Honcho memory`). The branch's stale nav/overview
+  edits and legacy/camel-case config aliases are intentionally not applied.
 - `lily/dev-1485-docs-vercel-ai-sdk` was squash-merged into current `main`
   through the Vercel AI SDK guide work and then extended with a newer Skill
   install section. Applying the branch tree would remove that newer section.
