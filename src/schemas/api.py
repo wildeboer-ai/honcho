@@ -10,6 +10,7 @@ from typing import Annotated, Any, Self, cast
 from urllib.parse import urlparse
 
 import tiktoken
+from fastapi_pagination.cursor import CursorPage
 from pydantic import (
     AliasChoices,
     BaseModel,
@@ -611,6 +612,22 @@ class SessionQueueStatus(BaseModel):
         description="Work units currently being processed"
     )
     pending_work_units: int = Field(description="Work units waiting to be processed")
+    pending_stalled_work_units: int = Field(
+        default=0,
+        description=(
+            "Pending representation work units waiting to accumulate enough "
+            "tokens to hit DERIVER_REPRESENTATION_BATCH_MAX_TOKENS. Always 0 "
+            "when DERIVER_FLUSH_ENABLED is true."
+        ),
+    )
+    pending_ready_work_units: int = Field(
+        default=0,
+        description=(
+            "Pending work units eligible to be claimed: non-representation "
+            "task types, plus representation work units whose pending tokens "
+            "are at or above the batch threshold, or when flush is enabled."
+        ),
+    )
 
 
 class QueueStatus(BaseModel):
@@ -631,9 +648,71 @@ class QueueStatus(BaseModel):
         description="Work units currently being processed"
     )
     pending_work_units: int = Field(description="Work units waiting to be processed")
+    pending_stalled_work_units: int = Field(
+        default=0,
+        description=(
+            "Pending representation work units waiting to accumulate enough "
+            "tokens to hit DERIVER_REPRESENTATION_BATCH_MAX_TOKENS. Always 0 "
+            "when DERIVER_FLUSH_ENABLED is true."
+        ),
+    )
+    pending_ready_work_units: int = Field(
+        default=0,
+        description=(
+            "Pending work units eligible to be claimed: non-representation "
+            "task types, plus representation work units whose pending tokens "
+            "are at or above the batch threshold, or when flush is enabled."
+        ),
+    )
     sessions: dict[str, SessionQueueStatus] | None = Field(
         default=None,
         description="Per-session status when not filtered by session",
+    )
+
+
+class QueueWorkUnit(BaseModel):
+    """Per-work-unit breakdown returned by /queue/work-units."""
+
+    work_unit_key: str
+    task_type: str
+    session_id: str | None = None
+    session_name: str | None = None
+    observer: str | None = None
+    observed: str | None = None
+    pending_items: int = Field(description="Unprocessed queue items in this work unit")
+    pending_tokens: int = Field(
+        description="Sum of token_count across messages on unprocessed queue items"
+    )
+    tokens_until_threshold: int = Field(
+        description=(
+            "Tokens still needed before the deriver will claim this batch. "
+            "0 for non-representation task types and when flush is enabled."
+        )
+    )
+    hit_threshold: bool = Field(
+        description=(
+            "True if this work unit is eligible to be claimed; false means it "
+            "is stalled below the representation token threshold."
+        )
+    )
+    in_progress: bool = Field(
+        description="True if a deriver worker has claimed this work unit"
+    )
+    oldest_item_at: datetime.datetime
+    newest_item_at: datetime.datetime
+
+
+class QueueWorkUnitsPage(CursorPage[QueueWorkUnit]):
+    """Cursor-paginated /queue/work-units response."""
+
+    representation_batch_max_tokens: int = Field(
+        description="DERIVER_REPRESENTATION_BATCH_MAX_TOKENS at request time"
+    )
+    flush_enabled: bool = Field(
+        description=(
+            "DERIVER_FLUSH_ENABLED. When true, the batch threshold is bypassed "
+            "and all pending representation work units are eligible to be claimed."
+        )
     )
 
 
