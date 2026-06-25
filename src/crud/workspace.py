@@ -1,6 +1,7 @@
 """CRUD helpers for workspace records and workspace deletion checks."""
 
 from dataclasses import dataclass
+from datetime import datetime
 from logging import getLogger
 from typing import Any
 
@@ -24,6 +25,26 @@ from src.utils.types import GetOrCreateResult
 from src.vector_store import get_external_vector_store
 
 logger = getLogger(__name__)
+
+
+@dataclass
+class WorkspaceStats:
+    """Workspace-level aggregate statistics."""
+
+    peer_count: int
+    session_count: int
+    message_count: int
+    oldest_message_at: datetime | None
+    newest_message_at: datetime | None
+
+
+@dataclass
+class ActivePeer:
+    """A peer with activity metrics."""
+
+    name: str
+    message_count: int
+    last_message_at: datetime | None
 
 
 @dataclass
@@ -534,3 +555,97 @@ async def delete_workspace(
         messages_deleted=messages_count,
         conclusions_deleted=conclusions_count,
     )
+
+
+async def get_workspace_stats(
+    db: AsyncSession,
+    workspace_name: str,
+) -> WorkspaceStats:
+    """Get aggregate statistics for a workspace."""
+    peer_count = int(
+        await db.scalar(
+            select(func.count(models.Peer.id)).where(
+                models.Peer.workspace_name == workspace_name
+            )
+        )
+        or 0
+    )
+    session_count = int(
+        await db.scalar(
+            select(func.count(models.Session.id)).where(
+                models.Session.workspace_name == workspace_name
+            )
+        )
+        or 0
+    )
+    msg_row = (
+        await db.execute(
+            select(
+                func.count(models.Message.id),
+                func.min(models.Message.created_at),
+                func.max(models.Message.created_at),
+            ).where(models.Message.workspace_name == workspace_name)
+        )
+    ).one()
+
+    return WorkspaceStats(
+        peer_count=peer_count,
+        session_count=session_count,
+        message_count=int(msg_row[0] or 0),
+        oldest_message_at=msg_row[1],
+        newest_message_at=msg_row[2],
+    )
+
+
+async def get_active_peers(
+    db: AsyncSession,
+    workspace_name: str,
+    limit: int = 20,
+    sort_by: str = "recent_activity",
+) -> list[ActivePeer]:
+    """Get the most active peers in a workspace."""
+    if limit <= 0:
+        return []
+    limit = min(limit, 50)
+
+    activity_subq = (
+        select(
+            models.Message.peer_name,
+            func.count(models.Message.id).label("message_count"),
+            func.max(models.Message.created_at).label("last_message_at"),
+        )
+        .where(models.Message.workspace_name == workspace_name)
+        .group_by(models.Message.peer_name)
+        .subquery()
+    )
+
+    stmt = (
+        select(
+            models.Peer.name,
+            func.coalesce(activity_subq.c.message_count, 0).label("message_count"),
+            activity_subq.c.last_message_at,
+        )
+        .outerjoin(activity_subq, models.Peer.name == activity_subq.c.peer_name)
+        .where(models.Peer.workspace_name == workspace_name)
+    )
+
+    if sort_by == "message_count":
+        stmt = stmt.order_by(
+            func.coalesce(activity_subq.c.message_count, 0).desc(),
+            models.Peer.name.asc(),
+        )
+    else:
+        stmt = stmt.order_by(
+            activity_subq.c.last_message_at.desc().nulls_last(),
+            models.Peer.name.asc(),
+        )
+
+    rows = (await db.execute(stmt.limit(limit))).all()
+    return [
+        ActivePeer(
+            name=row[0],
+            message_count=int(row[1]),
+            last_message_at=row[2],
+        )
+        for row in rows
+    ]

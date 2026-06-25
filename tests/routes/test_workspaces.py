@@ -1,4 +1,5 @@
 import datetime
+import json
 from typing import Any
 from unittest.mock import AsyncMock, patch
 
@@ -378,6 +379,152 @@ def test_search_workspace_empty_query(
         f"/v3/workspaces/{test_workspace.name}/search", json={"query": "", "limit": 10}
     )
     assert response.status_code == 200
+
+
+def test_workspace_chat_basic(
+    client: TestClient, sample_data: tuple[Workspace, Peer]
+):
+    test_workspace, _ = sample_data
+
+    response = client.post(
+        f"/v3/workspaces/{test_workspace.name}/chat",
+        json={
+            "query": "What do you know about the peers in this workspace?",
+            "stream": False,
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"content": "Test workspace chat response"}
+
+
+def test_workspace_chat_defaults(
+    client: TestClient, sample_data: tuple[Workspace, Peer]
+):
+    test_workspace, _ = sample_data
+
+    response = client.post(
+        f"/v3/workspaces/{test_workspace.name}/chat",
+        json={"query": "Hello workspace"},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"content": "Test workspace chat response"}
+
+
+def test_workspace_chat_with_session_id(
+    client: TestClient, sample_data: tuple[Workspace, Peer]
+):
+    test_workspace, _ = sample_data
+    session_id = str(generate_nanoid())
+
+    create_response = client.post(
+        f"/v3/workspaces/{test_workspace.name}/sessions",
+        json={"name": session_id},
+    )
+    assert create_response.status_code in (200, 201)
+
+    response = client.post(
+        f"/v3/workspaces/{test_workspace.name}/chat",
+        json={
+            "query": "Tell me about recent conversations",
+            "session_id": session_id,
+            "stream": False,
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"content": "Test workspace chat response"}
+
+
+def test_workspace_chat_with_reasoning_level(
+    client: TestClient, sample_data: tuple[Workspace, Peer]
+):
+    test_workspace, _ = sample_data
+
+    response = client.post(
+        f"/v3/workspaces/{test_workspace.name}/chat",
+        json={
+            "query": "Analyze common themes across all peers",
+            "stream": False,
+            "reasoning_level": "low",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"content": "Test workspace chat response"}
+
+
+def test_workspace_chat_streaming(
+    client: TestClient, sample_data: tuple[Workspace, Peer]
+):
+    test_workspace, _ = sample_data
+
+    response = client.post(
+        f"/v3/workspaces/{test_workspace.name}/chat",
+        json={
+            "query": "What patterns do you see across the workspace?",
+            "stream": True,
+        },
+    )
+
+    assert response.status_code == 200
+    assert "text/event-stream" in response.headers.get("content-type", "")
+
+    events: list[dict[str, Any]] = []
+    for line in response.text.strip().split("\n\n"):
+        if line.startswith("data: "):
+            events.append(json.loads(line[6:]))
+
+    assert [event.get("delta", {}).get("content") for event in events[:-1]] == [
+        "Test ",
+        "streaming ",
+        "response",
+    ]
+    assert events[-1] == {"done": True}
+
+
+def test_workspace_chat_empty_query_rejected(
+    client: TestClient, sample_data: tuple[Workspace, Peer]
+):
+    test_workspace, _ = sample_data
+
+    response = client.post(
+        f"/v3/workspaces/{test_workspace.name}/chat",
+        json={"query": "", "stream": False},
+    )
+
+    assert response.status_code == 422
+
+
+def test_workspace_chat_missing_query_rejected(
+    client: TestClient, sample_data: tuple[Workspace, Peer]
+):
+    test_workspace, _ = sample_data
+
+    response = client.post(
+        f"/v3/workspaces/{test_workspace.name}/chat",
+        json={"stream": False},
+    )
+
+    assert response.status_code == 422
+
+
+def test_workspace_chat_null_content_response(
+    client: TestClient,
+    sample_data: tuple[Workspace, Peer],
+    mock_llm_call_functions: dict[str, Any],
+):
+    test_workspace, _ = sample_data
+    mock_llm_call_functions["workspace_chat"].return_value = None
+
+    response = client.post(
+        f"/v3/workspaces/{test_workspace.name}/chat",
+        json={"query": "Some query", "stream": False},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"content": None}
     data = response.json()
 
     # Response should be a direct list of messages

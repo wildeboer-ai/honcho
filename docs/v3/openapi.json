@@ -374,6 +374,60 @@
         }
       }
     },
+    "/v3/workspaces/{workspace_id}/chat": {
+      "post": {
+        "tags": ["workspaces"],
+        "summary": "Query workspace knowledge using natural language",
+        "description": "Query the Workspace's collective knowledge using natural language.\n\nThe workspace agent can discover relevant peers, search workspace messages,\nand drill into specific peer representations to synthesize an answer.",
+        "operationId": "chat_v3_workspaces__workspace_id__chat_post",
+        "security": [{ "HTTPBearer": [] }],
+        "parameters": [
+          {
+            "name": "workspace_id",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string", "title": "Workspace Id" }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/WorkspaceChatOptions" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "content": {
+                      "anyOf": [{ "type": "string" }, { "type": "null" }],
+                      "title": "Content"
+                    }
+                  },
+                  "type": "object",
+                  "required": ["content"],
+                  "title": "DialecticResponse"
+                }
+              },
+              "text/event-stream": {}
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HTTPValidationError" }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v3/workspaces/{workspace_id}/peers/list": {
       "post": {
         "tags": ["peers"],
@@ -3873,6 +3927,37 @@
         "type": "object",
         "required": ["id", "created_at"],
         "title": "Workspace"
+      },
+      "WorkspaceChatOptions": {
+        "properties": {
+          "query": {
+            "type": "string",
+            "maxLength": 10000,
+            "minLength": 1,
+            "title": "Query",
+            "description": "Natural language query about the workspace"
+          },
+          "session_id": {
+            "anyOf": [{ "type": "string" }, { "type": "null" }],
+            "title": "Session Id",
+            "description": "Optional session ID to scope message searches"
+          },
+          "stream": {
+            "type": "boolean",
+            "title": "Stream",
+            "default": false
+          },
+          "reasoning_level": {
+            "type": "string",
+            "enum": ["minimal", "low", "medium", "high", "max"],
+            "title": "Reasoning Level",
+            "description": "Level of reasoning to apply: minimal, low, medium, high, or max",
+            "default": "low"
+          }
+        },
+        "type": "object",
+        "required": ["query"],
+        "title": "WorkspaceChatOptions"
       },
       "WorkspaceConfiguration": {
         "properties": {

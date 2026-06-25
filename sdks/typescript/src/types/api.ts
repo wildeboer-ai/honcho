@@ -38,6 +38,17 @@ export interface WorkspaceListParams {
   reverse?: boolean
 }
 
+export interface WorkspaceChatParams {
+  query: string
+  stream?: boolean
+  session_id?: string
+  reasoning_level?: 'minimal' | 'low' | 'medium' | 'high' | 'max'
+}
+
+export interface WorkspaceChatResponse {
+  content: string | null
+}
+
 // =============================================================================
 // Peer Types
 // =============================================================================

@@ -78,6 +78,7 @@ _RUNTIME_MOCK_TEST_BLOCKLIST_PREFIXES = (
     "tests/deriver/test_prompts.py",
     "tests/dialectic/test_model_config_usage.py",
     "tests/dialectic/test_two_phase.py",
+    "tests/dialectic/test_workspace_agent.py",
     "tests/scripts/",
     "tests/telemetry/test_events.py",
     # LLM transport tests mock providers directly and don't need database/runtime setup.
@@ -669,6 +670,12 @@ def mock_llm_call_functions(request: pytest.FixtureRequest):
         patch(
             "src.routers.peers.agentic_chat_stream", side_effect=mock_stream
         ) as mock_agentic_chat_stream,
+        patch(
+            "src.routers.workspaces.workspace_chat", new_callable=AsyncMock
+        ) as mock_workspace_chat,
+        patch(
+            "src.routers.workspaces.workspace_chat_stream", side_effect=mock_stream
+        ) as mock_workspace_chat_stream,
     ):
         # Mock return values for different function types
         mock_short_summary.return_value = "Test short summary content"
@@ -676,12 +683,15 @@ def mock_llm_call_functions(request: pytest.FixtureRequest):
 
         # Mock agentic_chat to return a string (matching actual return type)
         mock_agentic_chat.return_value = "Test dialectic response"
+        mock_workspace_chat.return_value = "Test workspace chat response"
 
         yield {
             "short_summary": mock_short_summary,
             "long_summary": mock_long_summary,
             "agentic_chat": mock_agentic_chat,
             "agentic_chat_stream": mock_agentic_chat_stream,
+            "workspace_chat": mock_workspace_chat,
+            "workspace_chat_stream": mock_workspace_chat_stream,
         }
 
 
@@ -835,6 +845,7 @@ def mock_tracked_db(request: pytest.FixtureRequest):
         "src.deriver.consumer.tracked_db",
         "src.deriver.enqueue.tracked_db",
         "src.routers.peers.tracked_db",
+        "src.routers.workspaces.tracked_db",
         "src.crud.representation.tracked_db",
         "src.dreamer.orchestrator.tracked_db",
         "src.dreamer.dream_scheduler.tracked_db",
