@@ -15,8 +15,7 @@ Integrated capability:
 - Moved the current minimal deriver prompt body into `src/templates/deriver/minimal.jinja`.
 - Moved the current dialectic agent system prompt body into `src/templates/dialectic/agent_system.jinja`.
 - Added configurable prompt template paths through `DERIVER_PROMPT_TEMPLATE`, `DIALECTIC_SYSTEM_PROMPT_TEMPLATE`, `[deriver].PROMPT_TEMPLATE`, and `[dialectic].SYSTEM_PROMPT_TEMPLATE`.
-- Added focused tests for template manager caching, missing-template errors, deriver rendering, dialectic rendering, and the existing deriver token-estimation prompt behavior.
-- Adjusted deriver prompt test fixtures so pure prompt tests do not require a local PostgreSQL service.
+- Added focused tests for template manager caching, missing-template errors, deriver rendering, and dialectic rendering.
 
 Source branch compatibility handling:
 
@@ -28,7 +27,12 @@ Source branch compatibility handling:
 
 Validation:
 
-- `uv run pytest tests/utils/test_templates.py tests/deriver/test_prompts.py`
+- `uv run pytest tests/utils/test_templates.py`
 - `uv run ruff check src/config.py src/deriver/prompts.py src/dialectic/prompts.py src/utils/templates.py tests/conftest.py tests/deriver/conftest.py tests/utils/test_templates.py`
 - `uv run basedpyright src/config.py src/deriver/prompts.py src/dialectic/prompts.py src/utils/templates.py tests/conftest.py tests/deriver/conftest.py tests/utils/test_templates.py`
+- `uv run basedpyright`
 - `git diff --check`
+
+CI validation:
+
+- GitHub Actions `test-python` covers the existing DB-backed deriver prompt tests with a PostgreSQL service.
