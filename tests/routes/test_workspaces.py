@@ -525,10 +525,6 @@ def test_workspace_chat_null_content_response(
 
     assert response.status_code == 200
     assert response.json() == {"content": None}
-    data = response.json()
-
-    # Response should be a direct list of messages
-    assert isinstance(data, list)
 
 
 def test_search_workspace_nonexistent(client: TestClient):
