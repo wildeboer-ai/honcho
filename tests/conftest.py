@@ -75,10 +75,12 @@ _RUNTIME_MOCK_TEST_BLOCKLIST_PREFIXES = (
     "tests/live_llm/",
     # Pure llm unit tests should stay isolated from the broader app/runtime fixtures.
     "tests/llm/",
+    "tests/deriver/test_prompts.py",
     # LLM transport tests mock providers directly and don't need database/runtime setup.
     "tests/utils/test_length_finish_reason.py",
     "tests/utils/test_clients.py",
     "tests/utils/test_files.py",
+    "tests/utils/test_templates.py",
     "tests/test_generate_jwt_script.py",
     # Pure JWT scope tests — operate on src.security directly, no DB needed.
     "tests/test_security.py",

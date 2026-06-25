@@ -15,13 +15,23 @@ from src.utils.work_unit import construct_work_unit_key
 
 
 @pytest.fixture(autouse=True)
-async def clean_queue_tables(db_session: AsyncSession) -> AsyncGenerator[None, None]:
+async def clean_queue_tables(
+    request: pytest.FixtureRequest,
+) -> AsyncGenerator[None, None]:
     """Clean up queue-related tables before each test to ensure isolation.
 
     This prevents webhook queue items and active queue sessions from previous tests
     from polluting subsequent tests, which can cause issues when tests have a limit
     on how many work units can be claimed (e.g., WORKERS=1).
     """
+    node = getattr(request, "node", None)
+    nodeid = getattr(node, "nodeid", "")
+    if isinstance(nodeid, str) and nodeid.startswith("tests/deriver/test_prompts.py"):
+        yield
+        return
+
+    db_session = cast(AsyncSession, request.getfixturevalue("db_session"))
+
     # Clean up before the test
     await db_session.execute(delete(models.ActiveQueueSession))
     await db_session.execute(delete(models.QueueItem))

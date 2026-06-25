@@ -804,6 +804,7 @@ class DeriverSettings(HonchoSettings):
     MAX_CUSTOM_INSTRUCTIONS_TOKENS: Annotated[
         int, Field(default=2000, ge=0, le=2000)
     ] = 2000
+    PROMPT_TEMPLATE: str = "deriver/minimal.jinja"
 
     # Maximum number of observations to return in working representation
     # This is applied to both explicit and deductive observations
@@ -951,6 +952,7 @@ class DialecticSettings(HonchoSettings):
     SESSION_HISTORY_MAX_TOKENS: Annotated[
         int, Field(default=4_096, ge=0, le=16_384)
     ] = 4_096
+    SYSTEM_PROMPT_TEMPLATE: str = "dialectic/agent_system.jinja"
 
     @model_validator(mode="before")
     @classmethod
