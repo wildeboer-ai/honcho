@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from functools import lru_cache
 from typing import assert_never
+from urllib.parse import urlsplit
 
 from anthropic import AsyncAnthropic
 from google import genai
@@ -31,6 +32,23 @@ from .history_adapters import (
     OpenAIHistoryAdapter,
 )
 from .types import ProviderClient
+
+_LOCAL_OLLAMA_HOSTS = frozenset({"127.0.0.1", "localhost", "host.docker.internal"})
+
+
+def _local_ollama_v1_url(base_url: str | None) -> str:
+    """Normalize and validate an Ollama OpenAI-compatible local endpoint."""
+    raw_url = base_url or "http://127.0.0.1:11434"
+    parsed = urlsplit(raw_url)
+    if parsed.scheme != "http" or parsed.hostname not in _LOCAL_OLLAMA_HOSTS:
+        raise ValidationException("Ollama transport requires an approved local HTTP endpoint")
+    return raw_url.rstrip("/") + "/v1"
+
+
+@lru_cache(maxsize=32)
+def get_ollama_client(base_url: str | None) -> AsyncOpenAI:
+    """Local Ollama through its OpenAI-compatible API; no remote credential."""
+    return AsyncOpenAI(api_key="ollama-local", base_url=_local_ollama_v1_url(base_url))
 
 
 @lru_cache(maxsize=1)
@@ -135,6 +153,13 @@ def client_for_model_config(
         if existing_client is not None:
             return existing_client
 
+    if provider == "ollama":
+        if model_config.api_key is not None:
+            raise ValidationException("Ollama transport does not accept model API credentials")
+        if model_config.fallback is not None:
+            raise ValidationException("Ollama transport does not permit fallback models")
+        return get_ollama_client(model_config.base_url)
+
     api_key = model_config.api_key or default_transport_api_key(provider)
     base_url = model_config.base_url
     if not api_key:
@@ -160,6 +185,8 @@ def backend_for_provider(
         return OpenAIBackend(client)
     if provider == "gemini":
         return GeminiBackend(client)
+    if provider == "ollama":
+        return OpenAIBackend(client)
     assert_never(provider)
 
 
@@ -194,6 +221,7 @@ __all__ = [
     "get_backend",
     "get_gemini_client",
     "get_gemini_override_client",
+    "get_ollama_client",
     "get_openai_client",
     "get_openai_override_client",
     "history_adapter_for_provider",

@@ -1,9 +1,11 @@
 import logging
 import re
+import time
 import uuid
 from collections.abc import Awaitable, Callable
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING
+from urllib.parse import urlsplit, urlunsplit
 
 import sentry_sdk
 from fastapi import FastAPI, Request, Response
@@ -12,12 +14,14 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi_pagination import add_pagination
 from pydantic import ValidationError
+from redis import asyncio as redis_asyncio
 from sentry_sdk.integrations.fastapi import FastApiIntegration
 from sentry_sdk.integrations.sqlalchemy import SqlalchemyIntegration
 from sentry_sdk.integrations.starlette import StarletteIntegration
+from sqlalchemy import text
 
 from src._version import HONCHO_VERSION
-from src.cache.client import close_cache, init_cache
+from src.cache.client import close_cache, init_cache, is_cache_enabled
 from src.config import settings
 from src.db import engine, register_db_query_instrumentation, request_context
 from src.dev_tools import setup_dev_tools
@@ -77,6 +81,8 @@ logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
 )
 logger = logging.getLogger(__name__)
+_READINESS_FAILURE_LOG_INTERVAL_SECONDS = 60.0
+_last_readiness_failure_log = 0.0
 
 # Suppress cashews Redis error logs (NoScriptError, ConnectionError, etc.)
 # These are handled gracefully by SafeRedis and don't need full tracebacks
@@ -219,8 +225,53 @@ app.add_route("/metrics", metrics_endpoint, methods=["GET"])
 
 @app.get("/health")
 async def health_check():
-    """Health check endpoint for monitoring and container orchestration."""
+    """Return process liveness only; use ``/readyz`` before routing traffic."""
     return {"status": "ok"}
+
+
+@app.get("/readyz")
+async def readiness_check() -> Response:
+    """Prove the API can use its required database and cache dependencies.
+
+    ``/health`` intentionally remains a cheap liveness signal.  This endpoint
+    is the admission/readiness gate for the Compose API and must fail closed:
+    an HTTP listener without Postgres or Redis is not a usable Honcho service.
+    It deliberately returns no connection details or exception text.
+    """
+    try:
+        async with engine.connect() as connection:
+            await connection.execute(text("SELECT 1"))
+
+        if is_cache_enabled():
+            # Cashews accepts cache-only query parameters (for example
+            # ``suppress``) that redis-py rejects. A direct readiness probe
+            # needs only the transport URL.
+            cache_url_parts = urlsplit(settings.CACHE.URL)
+            redis_url = urlunsplit(cache_url_parts._replace(query=""))
+            redis_client = redis_asyncio.from_url(redis_url)
+            try:
+                await redis_client.ping()
+            finally:
+                await redis_client.aclose()
+    except Exception:
+        global _last_readiness_failure_log
+        now = time.monotonic()
+        if now - _last_readiness_failure_log >= _READINESS_FAILURE_LOG_INTERVAL_SECONDS:
+            _last_readiness_failure_log = now
+            logger.warning(
+                "Honcho readiness check failed; suppressing duplicate traces for %.0f seconds",
+                _READINESS_FAILURE_LOG_INTERVAL_SECONDS,
+                exc_info=True,
+            )
+        return JSONResponse(
+            status_code=503,
+            content={"status": "unavailable", "checks": {"database": "required", "cache": "required"}},
+        )
+
+    return JSONResponse(
+        status_code=200,
+        content={"status": "ready", "checks": {"database": "ok", "cache": "ok"}},
+    )
 
 
 # Global exception handlers

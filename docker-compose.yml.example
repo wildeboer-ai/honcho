@@ -20,33 +20,60 @@ services:
       redis:
         condition: service_healthy
     ports:
-      - "127.0.0.1:8000:8000"
+      - "127.0.0.1:${HONCHO_API_PORT:-8500}:8000"
     healthcheck:
       test:
         [
           "CMD",
           "/app/.venv/bin/python",
           "-c",
-          "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=2).read()",
+          "import urllib.request; urllib.request.urlopen('http://localhost:8000/readyz', timeout=2).read()",
         ]
       interval: 5s
       timeout: 5s
-      retries: 5
-      start_period: 10s
+      retries: 12
+      start_period: 45s
     # -- Development: mount source for live reload --
     # volumes:
     #   - .:/app
     #   - venv:/app/.venv
     environment:
-      - DB_CONNECTION_URI=postgresql+psycopg://postgres:postgres@database:5432/postgres
+      - DB_CONNECTION_URI=postgresql+psycopg://postgres:${HONCHO_POSTGRES_PASSWORD:?set HONCHO_POSTGRES_PASSWORD in .env}@database:5432/postgres
       - CACHE_URL=redis://redis:6379/0?suppress=true
       - CACHE_ENABLED=true
+      - EMBEDDING_VECTOR_DIMENSIONS=768
+      - EMBEDDING_MODEL_CONFIG__TRANSPORT=ollama
+      - EMBEDDING_MODEL_CONFIG__MODEL=nomic-embed-text
+      - EMBEDDING_MODEL_CONFIG__OVERRIDES__BASE_URL=http://host.docker.internal:11434
+      # Local-only reasoning policy: a remote primary, fallback, credential, or
+      # non-local endpoint fails settings validation before any prompt is sent.
+      - DERIVER_LOCAL_ONLY=true
+      - DERIVER_MODEL_CONFIG__TRANSPORT=ollama
+      - DERIVER_MODEL_CONFIG__MODEL=gemma3:12b
+      - DERIVER_MODEL_CONFIG__OVERRIDES__BASE_URL=http://host.docker.internal:11434
+      - DIALECTIC_LOCAL_ONLY=true
+      - DIALECTIC_LEVELS__MINIMAL__MODEL_CONFIG__TRANSPORT=ollama
+      - DIALECTIC_LEVELS__MINIMAL__MODEL_CONFIG__MODEL=gemma3:12b
+      - DIALECTIC_LEVELS__MINIMAL__MODEL_CONFIG__OVERRIDES__BASE_URL=http://host.docker.internal:11434
+      - DIALECTIC_LEVELS__LOW__MODEL_CONFIG__TRANSPORT=ollama
+      - DIALECTIC_LEVELS__LOW__MODEL_CONFIG__MODEL=gemma3:12b
+      - DIALECTIC_LEVELS__LOW__MODEL_CONFIG__OVERRIDES__BASE_URL=http://host.docker.internal:11434
+      - DIALECTIC_LEVELS__MEDIUM__MODEL_CONFIG__TRANSPORT=ollama
+      - DIALECTIC_LEVELS__MEDIUM__MODEL_CONFIG__MODEL=gemma3:12b
+      - DIALECTIC_LEVELS__MEDIUM__MODEL_CONFIG__OVERRIDES__BASE_URL=http://host.docker.internal:11434
+      - DIALECTIC_LEVELS__HIGH__MODEL_CONFIG__TRANSPORT=ollama
+      - DIALECTIC_LEVELS__HIGH__MODEL_CONFIG__MODEL=gemma3:12b
+      - DIALECTIC_LEVELS__HIGH__MODEL_CONFIG__OVERRIDES__BASE_URL=http://host.docker.internal:11434
+      - DIALECTIC_LEVELS__MAX__MODEL_CONFIG__TRANSPORT=ollama
+      - DIALECTIC_LEVELS__MAX__MODEL_CONFIG__MODEL=gemma3:12b
+      - DIALECTIC_LEVELS__MAX__MODEL_CONFIG__OVERRIDES__BASE_URL=http://host.docker.internal:11434
     env_file:
       - path: .env
         required: false
     restart: unless-stopped
 
   deriver:
+    profiles: ["reasoning"]
     build:
       context: .
       dockerfile: Dockerfile
@@ -63,13 +90,95 @@ services:
     #   - .:/app
     #   - venv:/app/.venv
     environment:
-      - DB_CONNECTION_URI=postgresql+psycopg://postgres:postgres@database:5432/postgres
+      - DB_CONNECTION_URI=postgresql+psycopg://postgres:${HONCHO_POSTGRES_PASSWORD:?set HONCHO_POSTGRES_PASSWORD in .env}@database:5432/postgres
       - CACHE_URL=redis://redis:6379/0?suppress=true
       - CACHE_ENABLED=true
+      - EMBEDDING_VECTOR_DIMENSIONS=768
+      - EMBEDDING_MODEL_CONFIG__TRANSPORT=ollama
+      - EMBEDDING_MODEL_CONFIG__MODEL=nomic-embed-text
+      - EMBEDDING_MODEL_CONFIG__OVERRIDES__BASE_URL=http://host.docker.internal:11434
+      # Local-only reasoning policy: a remote primary, fallback, credential, or
+      # non-local endpoint fails settings validation before any prompt is sent.
+      - DERIVER_LOCAL_ONLY=true
+      - DERIVER_MODEL_CONFIG__TRANSPORT=ollama
+      - DERIVER_MODEL_CONFIG__MODEL=gemma3:12b
+      - DERIVER_MODEL_CONFIG__OVERRIDES__BASE_URL=http://host.docker.internal:11434
+      - DIALECTIC_LOCAL_ONLY=true
+      - DIALECTIC_LEVELS__MINIMAL__MODEL_CONFIG__TRANSPORT=ollama
+      - DIALECTIC_LEVELS__MINIMAL__MODEL_CONFIG__MODEL=gemma3:12b
+      - DIALECTIC_LEVELS__MINIMAL__MODEL_CONFIG__OVERRIDES__BASE_URL=http://host.docker.internal:11434
+      - DIALECTIC_LEVELS__LOW__MODEL_CONFIG__TRANSPORT=ollama
+      - DIALECTIC_LEVELS__LOW__MODEL_CONFIG__MODEL=gemma3:12b
+      - DIALECTIC_LEVELS__LOW__MODEL_CONFIG__OVERRIDES__BASE_URL=http://host.docker.internal:11434
+      - DIALECTIC_LEVELS__MEDIUM__MODEL_CONFIG__TRANSPORT=ollama
+      - DIALECTIC_LEVELS__MEDIUM__MODEL_CONFIG__MODEL=gemma3:12b
+      - DIALECTIC_LEVELS__MEDIUM__MODEL_CONFIG__OVERRIDES__BASE_URL=http://host.docker.internal:11434
+      - DIALECTIC_LEVELS__HIGH__MODEL_CONFIG__TRANSPORT=ollama
+      - DIALECTIC_LEVELS__HIGH__MODEL_CONFIG__MODEL=gemma3:12b
+      - DIALECTIC_LEVELS__HIGH__MODEL_CONFIG__OVERRIDES__BASE_URL=http://host.docker.internal:11434
+      - DIALECTIC_LEVELS__MAX__MODEL_CONFIG__TRANSPORT=ollama
+      - DIALECTIC_LEVELS__MAX__MODEL_CONFIG__MODEL=gemma3:12b
+      - DIALECTIC_LEVELS__MAX__MODEL_CONFIG__OVERRIDES__BASE_URL=http://host.docker.internal:11434
     env_file:
       - path: .env
         required: false
     restart: unless-stopped
+
+  vector-reconciler:
+    profiles: ["vector-reconcile"]
+    build:
+      context: .
+      dockerfile: Dockerfile
+    entrypoint:
+      [
+        "/app/.venv/bin/python",
+        "scripts/reconcile_message_vectors_local.py",
+        "--execute",
+      ]
+    depends_on:
+      api:
+        condition: service_healthy
+      database:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      - DB_CONNECTION_URI=postgresql+psycopg://postgres:${HONCHO_POSTGRES_PASSWORD:?set HONCHO_POSTGRES_PASSWORD in .env}@database:5432/postgres
+      - CACHE_URL=redis://redis:6379/0?suppress=true
+      - CACHE_ENABLED=true
+      - EMBEDDING_VECTOR_DIMENSIONS=768
+      - EMBEDDING_MODEL_CONFIG__TRANSPORT=ollama
+      - EMBEDDING_MODEL_CONFIG__MODEL=nomic-embed-text
+      - EMBEDDING_MODEL_CONFIG__OVERRIDES__BASE_URL=http://host.docker.internal:11434
+      # Local-only reasoning policy: a remote primary, fallback, credential, or
+      # non-local endpoint fails settings validation before any prompt is sent.
+      - DERIVER_LOCAL_ONLY=true
+      - DERIVER_MODEL_CONFIG__TRANSPORT=ollama
+      - DERIVER_MODEL_CONFIG__MODEL=gemma3:12b
+      - DERIVER_MODEL_CONFIG__OVERRIDES__BASE_URL=http://host.docker.internal:11434
+      - DIALECTIC_LOCAL_ONLY=true
+      - DIALECTIC_LEVELS__MINIMAL__MODEL_CONFIG__TRANSPORT=ollama
+      - DIALECTIC_LEVELS__MINIMAL__MODEL_CONFIG__MODEL=gemma3:12b
+      - DIALECTIC_LEVELS__MINIMAL__MODEL_CONFIG__OVERRIDES__BASE_URL=http://host.docker.internal:11434
+      - DIALECTIC_LEVELS__LOW__MODEL_CONFIG__TRANSPORT=ollama
+      - DIALECTIC_LEVELS__LOW__MODEL_CONFIG__MODEL=gemma3:12b
+      - DIALECTIC_LEVELS__LOW__MODEL_CONFIG__OVERRIDES__BASE_URL=http://host.docker.internal:11434
+      - DIALECTIC_LEVELS__MEDIUM__MODEL_CONFIG__TRANSPORT=ollama
+      - DIALECTIC_LEVELS__MEDIUM__MODEL_CONFIG__MODEL=gemma3:12b
+      - DIALECTIC_LEVELS__MEDIUM__MODEL_CONFIG__OVERRIDES__BASE_URL=http://host.docker.internal:11434
+      - DIALECTIC_LEVELS__HIGH__MODEL_CONFIG__TRANSPORT=ollama
+      - DIALECTIC_LEVELS__HIGH__MODEL_CONFIG__MODEL=gemma3:12b
+      - DIALECTIC_LEVELS__HIGH__MODEL_CONFIG__OVERRIDES__BASE_URL=http://host.docker.internal:11434
+      - DIALECTIC_LEVELS__MAX__MODEL_CONFIG__TRANSPORT=ollama
+      - DIALECTIC_LEVELS__MAX__MODEL_CONFIG__MODEL=gemma3:12b
+      - DIALECTIC_LEVELS__MAX__MODEL_CONFIG__OVERRIDES__BASE_URL=http://host.docker.internal:11434
+    volumes:
+      # Sanitized reconciliation receipts persist locally; no content is written.
+      - ./reports/vector-reconciliation:/app/reports/vector-reconciliation
+    env_file:
+      - path: .env
+        required: false
+    restart: "no"
 
   database:
     image: pgvector/pgvector:pg15
@@ -80,11 +189,7 @@ services:
     environment:
       - POSTGRES_DB=postgres
       - POSTGRES_USER=postgres
-      - POSTGRES_PASSWORD=postgres
-      # Allow passwordless connections from the host (port is bound to 127.0.0.1).
-      # Lets the local test suite and ad-hoc tools connect without supplying a
-      # password. Do NOT use this in production.
-      - POSTGRES_HOST_AUTH_METHOD=trust
+      - POSTGRES_PASSWORD=${HONCHO_POSTGRES_PASSWORD:?set HONCHO_POSTGRES_PASSWORD in .env}
       - PGDATA=/var/lib/postgresql/data/pgdata
     volumes:
       - ./database/init.sql:/docker-entrypoint-initdb.d/init.sql

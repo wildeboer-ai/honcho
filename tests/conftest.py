@@ -89,6 +89,8 @@ _RUNTIME_MOCK_TEST_BLOCKLIST_PREFIXES = (
     "tests/utils/test_reverse_engineer.py",
     "tests/test_dev_tools.py",
     "tests/test_generate_jwt_script.py",
+    # Pure dependency-readiness unit tests replace their own engine/cache seams.
+    "tests/test_readiness.py",
     # Pure JWT scope tests — operate on src.security directly, no DB needed.
     "tests/test_security.py",
 )

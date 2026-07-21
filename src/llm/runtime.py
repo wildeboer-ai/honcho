@@ -40,7 +40,11 @@ def update_current_langfuse_observation(
     name: str | None = None,
 ) -> None:
     """Best-effort annotation of the current Langfuse span with LLM routing."""
-    if not settings.LANGFUSE_PUBLIC_KEY:
+    if (
+        not settings.LANGFUSE_PUBLIC_KEY
+        or settings.DERIVER.LOCAL_ONLY
+        or settings.DIALECTIC.LOCAL_ONLY
+    ):
         return
 
     try:
