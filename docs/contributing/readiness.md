@@ -9,7 +9,9 @@ does not treat a listening HTTP process alone as dependency-ready.
 The response has `status` (`ready` or `unavailable`) and `checks.database` and
 `checks.cache`. Checks are `ok`, `unavailable`, or `not_checked`; disabled cache
 is explicitly `disabled`. HTTP 200 requires database success and either cache
-success or disabled cache. Other results return 503. Every response has
+success or disabled cache. Normal readiness responses use HTTP 200 or 503 and
+include these documented JSON fields. Ordinary dependency, configuration, or
+cleanup exceptions return 503. Every readiness response has
 `Cache-Control: no-store`; each request rechecks dependencies without retaining
 shared result state. A database failure skips the cache probe. Ordinary cache
 operations may use the existing in-memory fallback, but configured Redis still
@@ -19,8 +21,12 @@ The combined probe has a 1.5-second asynchronous cancellation budget and Redis
 cleanup has a separate 0.25-second budget. These rely on cooperative driver
 cancellation; they are not a hard wall-clock guarantee for a blocking or
 cancellation-suppressing driver. Caller cancellation propagates after attempted
-cleanup. Each probe returns its database connection and owns/closes only its
-temporary Redis client. Cleanup failure also prevents a ready response.
+cleanup. If a dependency itself raises `asyncio.CancelledError` during the probe
+or cleanup, it can escape ordinary `Exception` handling and surface through the
+ASGI/framework error path as HTTP 500 instead of readiness 503; no readiness
+response or header is guaranteed in that case, and it never becomes ready. Each
+probe returns its database connection and owns/closes only its temporary Redis
+client. Cleanup failure also prevents a ready response.
 
 The Redis URL removes only the demonstrated Cashews-specific `suppress` query
 option. Redis database, TLS and transport options remain intact and are parsed
