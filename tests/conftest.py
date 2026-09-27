@@ -68,6 +68,8 @@ DB_URI = (
 CONNECTION_URI = make_url(DB_URI)
 
 _RUNTIME_MOCK_TEST_BLOCKLIST_PREFIXES = (
+    # Readiness tests own their HTTP/dependency fixtures and never use a store.
+    "tests/offline/",
     # Benchmarks and migration tests have their own execution/runtime constraints.
     "tests/bench/",
     "tests/alembic/",
