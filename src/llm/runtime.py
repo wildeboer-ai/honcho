@@ -23,6 +23,7 @@ from src.config import (
     resolve_model_config,
     settings,
 )
+from src.exceptions import ValidationException
 
 from .registry import backend_for_provider, client_for_model_config
 from .types import ProviderClient, ReasoningEffortType
@@ -40,7 +41,11 @@ def update_current_langfuse_observation(
     name: str | None = None,
 ) -> None:
     """Best-effort annotation of the current Langfuse span with LLM routing."""
-    if not settings.LANGFUSE_PUBLIC_KEY:
+    if (
+        not settings.LANGFUSE_PUBLIC_KEY
+        or settings.DERIVER.LOCAL_ONLY
+        or settings.DIALECTIC.LOCAL_ONLY
+    ):
         return
 
     try:
@@ -139,6 +144,11 @@ def plan_attempt(
     primary config, and from the fallback config otherwise, so cross-transport
     fallbacks use provider-appropriate params.
     """
+    if (
+        runtime_model_config.transport == "ollama"
+        and runtime_model_config.fallback is not None
+    ):
+        raise ValidationException("Ollama transport does not permit fallback models")
     selected = select_model_config_for_attempt(
         runtime_model_config,
         attempt=attempt,
