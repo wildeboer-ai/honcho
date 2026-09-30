@@ -1,0 +1,340 @@
+"""Bounded local-only message-vector reconciliation.
+
+This CLI intentionally reconciles only pending ``message_embeddings`` rows. It
+does not process representation, dialectic, dream, summary, document, or broad
+deriver queue work. Receipts contain counts, IDs, and content hashes only.
+"""
+
+from __future__ import annotations
+
+import argparse
+import asyncio
+import datetime as dt
+import hashlib
+import json
+import os
+import sys
+import time
+import uuid
+from pathlib import Path
+
+from sqlalchemy import ColumnElement, distinct, func, select
+from sqlalchemy.sql.selectable import ScalarSelect
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from src import models
+from src.config import resolve_embedding_model_config, settings
+from src.db import engine
+from src.dependencies import tracked_db
+from src.embedding_client import embedding_client
+from src.local_transport import local_ollama_url
+from src.reconciler.sync_vectors import (
+    ReconciliationMetrics,
+    _reconcile_message_embeddings_batch,  # pyright: ignore[reportPrivateUsage]
+)
+from src.startup.embedding_validator import validate_embedding_schema
+from src.vector_store import get_external_vector_store
+
+DEFAULT_MANIFEST_DIR = Path("reports/vector-reconciliation")
+
+
+def _utc_now() -> str:
+    return dt.datetime.now(dt.UTC).replace(microsecond=0).isoformat()
+
+
+def _hash(value: str) -> str:
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+def _assert_local_embedding_provider() -> dict[str, str | int | bool | None]:
+    runtime = resolve_embedding_model_config(settings.EMBEDDING.MODEL_CONFIG)
+    # Use the same transport implementation as the actual embedding caller.
+    # OpenAI-compatible servers remain available through the Ollama transport.
+    if runtime.transport != "ollama" or runtime.api_key is not None:
+        raise SystemExit(
+            "Reconciliation requires credential-free local Ollama transport"
+        )
+    base_url = local_ollama_url(runtime.base_url)
+    if settings.VECTOR_STORE.TYPE != "pgvector":
+        raise SystemExit(
+            "Local reconciliation requires the selected PostgreSQL vector store"
+        )
+    if (
+        settings.TELEMETRY.ENABLED
+        or settings.DEV_TOOLS.ENABLED
+        or settings.SENTRY.ENABLED
+    ):
+        raise SystemExit("Disable telemetry exporters before local reconciliation")
+    return {
+        "transport": runtime.transport,
+        "model": runtime.model,
+        "base_url": base_url,
+        "vector_dimensions": settings.EMBEDDING.VECTOR_DIMENSIONS,
+    }
+
+
+async def _vector_report() -> dict[str, object]:
+    async with tracked_db("local_vector_reconcile_report", read_only=True) as db:
+
+        def count_rows(
+            model: type[models.Message] | type[models.MessageEmbedding],
+            *conditions: ColumnElement[bool],
+        ) -> ScalarSelect[int]:
+            return (
+                select(func.count())
+                .select_from(model)
+                .where(*conditions)
+                .scalar_subquery()
+            )
+
+        scalar_rows = await db.execute(
+            select(
+                count_rows(models.Message).label("messages"),
+                count_rows(models.MessageEmbedding).label("message_embedding_records"),
+                count_rows(
+                    models.MessageEmbedding, models.MessageEmbedding.embedding.is_(None)
+                ).label("null_vectors"),
+                count_rows(
+                    models.MessageEmbedding,
+                    models.MessageEmbedding.sync_state == "pending",
+                ).label("pending_records"),
+                count_rows(
+                    models.MessageEmbedding,
+                    models.MessageEmbedding.sync_state == "synced",
+                ).label("synced_records"),
+                count_rows(
+                    models.MessageEmbedding,
+                    models.MessageEmbedding.sync_state == "failed",
+                ).label("failed_records"),
+                select(func.count(distinct(models.Message.public_id)))
+                .scalar_subquery()
+                .label("distinct_messages"),
+                select(func.count(distinct(models.MessageEmbedding.message_id)))
+                .scalar_subquery()
+                .label("distinct_embedded_messages"),
+            )
+        )
+        row = scalar_rows.mappings().one()
+
+        pending = (
+            await db.execute(
+                select(
+                    models.MessageEmbedding.id,
+                    models.MessageEmbedding.message_id,
+                    models.MessageEmbedding.created_at,
+                    models.MessageEmbedding.sync_attempts,
+                    models.MessageEmbedding.content,
+                )
+                .where(models.MessageEmbedding.embedding.is_(None))
+                .order_by(models.MessageEmbedding.created_at.asc())
+                .limit(25)
+            )
+        ).all()
+
+        missing_message_rows = (
+            await db.execute(
+                select(models.Message.public_id)
+                .outerjoin(
+                    models.MessageEmbedding,
+                    models.MessageEmbedding.message_id == models.Message.public_id,
+                )
+                .where(models.MessageEmbedding.id.is_(None))
+                .order_by(models.Message.created_at.asc())
+                .limit(50)
+            )
+        ).all()
+
+        synthetic_probe = (
+            await db.execute(
+                select(func.count())
+                .select_from(models.MessageEmbedding)
+                .where(models.MessageEmbedding.embedding.is_not(None))
+                .where(models.MessageEmbedding.sync_state == "synced")
+            )
+        ).scalar_one()
+
+    oldest = pending[0].created_at.isoformat() if pending else None
+    newest = pending[-1].created_at.isoformat() if pending else None
+    return {
+        "counts": dict(row),
+        "pending_window": {"oldest": oldest, "newest_sampled": newest},
+        "pending_sample": [
+            {
+                "embedding_id": item.id,
+                "message_id": item.message_id,
+                "message_id_hash": _hash(item.message_id),
+                "content_hash": _hash(item.content),
+                "sync_attempts": item.sync_attempts,
+                "created_at": item.created_at.isoformat(),
+            }
+            for item in pending
+        ],
+        "missing_embedding_message_ids_sample": [
+            {
+                "message_id": item.public_id,
+                "message_id_hash": _hash(item.public_id),
+            }
+            for item in missing_message_rows
+        ],
+        "vector_row_precondition": {
+            "search_executed": False,
+            "synced_vector_rows_available": synthetic_probe,
+        },
+    }
+
+
+async def _run_batches(max_batches: int) -> ReconciliationMetrics:
+    metrics = ReconciliationMetrics()
+    external = get_external_vector_store()
+    for _ in range(max_batches):
+        did_work = await _reconcile_message_embeddings_batch(external, metrics)
+        if not did_work:
+            break
+    return metrics
+
+
+async def _release_leased_pending_null_vectors(max_rows: int) -> int:
+    async with tracked_db("local_vector_reconcile_release_leases") as db:
+        rows = (
+            await db.execute(
+                select(models.MessageEmbedding.id)
+                .where(models.MessageEmbedding.sync_state == "pending")
+                .where(models.MessageEmbedding.embedding.is_(None))
+                .order_by(models.MessageEmbedding.id)
+                .limit(max_rows)
+            )
+        ).scalars()
+        ids = list(rows.all())
+        if not ids:
+            return 0
+        for emb_id in ids:
+            emb = await db.get(models.MessageEmbedding, emb_id)
+            if emb is not None:
+                emb.last_sync_at = None
+        await db.commit()
+        return len(ids)
+
+
+async def _create_missing_embedding_rows(max_rows: int) -> int:
+    async with tracked_db("local_vector_reconcile_create_missing_rows") as db:
+        messages = list(
+            (
+                await db.execute(
+                    select(models.Message)
+                    .outerjoin(
+                        models.MessageEmbedding,
+                        models.Message.public_id == models.MessageEmbedding.message_id,
+                    )
+                    .where(models.MessageEmbedding.id.is_(None))
+                    .where(models.Message.content.isnot(None))
+                    .order_by(models.Message.created_at.asc())
+                    .limit(max_rows)
+                )
+            )
+            .scalars()
+            .all()
+        )
+        id_resource_dict = {
+            message.public_id: message.content
+            for message in messages
+            if message.content and message.content.strip()
+        }
+        if not id_resource_dict:
+            return 0
+
+        chunks_by_id = embedding_client.prepare_chunks(id_resource_dict)
+        rows: list[models.MessageEmbedding] = []
+        for message in messages:
+            for chunk_text in chunks_by_id.get(message.public_id, []):
+                rows.append(
+                    models.MessageEmbedding(
+                        content=chunk_text,
+                        message_id=message.public_id,
+                        workspace_name=message.workspace_name,
+                        session_name=message.session_name,
+                        peer_name=message.peer_name,
+                        sync_state="pending",
+                        embedding=None,
+                    )
+                )
+        if not rows:
+            return 0
+        db.add_all(rows)
+        await db.commit()
+        return len(rows)
+
+
+def _bounded_count(value: str) -> int:
+    count = int(value)
+    if not 1 <= count <= 1000:
+        raise argparse.ArgumentTypeError("count must be between 1 and 1000")
+    return count
+
+
+async def _main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--execute", action="store_true")
+    parser.add_argument("--release-leased-pending", action="store_true")
+    parser.add_argument("--create-missing-embedding-rows", action="store_true")
+    parser.add_argument("--max-batches", type=_bounded_count, default=20)
+    parser.add_argument("--max-repair-rows", type=_bounded_count, default=1000)
+    parser.add_argument("--manifest-dir", type=Path, default=DEFAULT_MANIFEST_DIR)
+    args = parser.parse_args()
+
+    provider = _assert_local_embedding_provider()
+    await validate_embedding_schema(engine)
+
+    before = await _vector_report()
+    metrics = ReconciliationMetrics()
+    released_leases = 0
+    created_missing_rows = 0
+    started = time.monotonic()
+    if args.execute:
+        if args.create_missing_embedding_rows:
+            created_missing_rows = await _create_missing_embedding_rows(
+                args.max_repair_rows
+            )
+        if args.release_leased_pending:
+            released_leases = await _release_leased_pending_null_vectors(
+                args.max_repair_rows
+            )
+        metrics = await _run_batches(args.max_batches)
+    after = await _vector_report()
+
+    manifest = {
+        "created_at": _utc_now(),
+        "mode": "execute" if args.execute else "dry_run",
+        "local_embedding_provider": provider,
+        "scope": "message_embeddings_only",
+        "deriver_reactivated": False,
+        "embedding_endpoint_policy": "configured local alias; DNS and server ownership are operator assertions",
+        "database_scope": "all workspaces in explicitly configured database",
+        "max_repair_rows": args.max_repair_rows,
+        "max_batches": args.max_batches,
+        "elapsed_seconds": round(time.monotonic() - started, 3),
+        "released_pending_leases": released_leases,
+        "created_missing_embedding_rows": created_missing_rows,
+        "before": before,
+        "metrics": {
+            "message_embeddings_synced": metrics.message_embeddings_synced,
+            "message_embeddings_failed": metrics.message_embeddings_failed,
+            "documents_synced": metrics.documents_synced,
+            "documents_failed": metrics.documents_failed,
+            "documents_cleaned": metrics.documents_cleaned,
+        },
+        "after": after,
+    }
+    args.manifest_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+    path = args.manifest_dir / f"message-vector-reconciliation-{uuid.uuid4().hex}.json"
+    with os.fdopen(
+        os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "w"
+    ) as report:
+        report.write(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
+    print(path)
+    print(json.dumps(after["counts"], sort_keys=True))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(asyncio.run(_main()))

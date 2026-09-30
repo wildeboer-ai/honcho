@@ -33,6 +33,11 @@ P = ParamSpec("P")
 R = TypeVar("R")
 
 
+def _local_only_reasoning_enabled() -> bool:
+    """Whether local reasoning must never export prompt/trace payloads."""
+    return settings.DERIVER.LOCAL_ONLY or settings.DIALECTIC.LOCAL_ONLY
+
+
 @overload
 def conditional_observe(
     func: Callable[P, R],
@@ -67,11 +72,10 @@ def conditional_observe(
     """
 
     def decorator(f: Callable[P, R]) -> Callable[P, R]:
-        if settings.LANGFUSE_PUBLIC_KEY:
+        if settings.LANGFUSE_PUBLIC_KEY and not _local_only_reasoning_enabled():
             observe_name = name if name is not None else f.__name__
             return observe(name=observe_name)(f)
-        else:
-            return f
+        return f
 
     if func is not None:
         # Used as @conditional_observe (without parentheses)
