@@ -15,6 +15,8 @@ from pydantic_settings import (
     SettingsConfigDict,
 )
 
+from src.local_transport import local_ollama_url
+
 # Load .env file for local development.
 # Make sure this is called before AppSettings is instantiated if you rely on .env for AppSettings construction.
 if not os.getenv("PYTHON_DOTENV_DISABLED"):
@@ -22,9 +24,27 @@ if not os.getenv("PYTHON_DOTENV_DISABLED"):
 
 logger = logging.getLogger(__name__)
 
-ModelTransport = Literal["anthropic", "openai", "gemini"]
-EmbeddingTransport = Literal["openai", "gemini"]
+ModelTransport = Literal["anthropic", "openai", "gemini", "ollama"]
+EmbeddingTransport = Literal["openai", "gemini", "ollama"]
 EmbeddingDimensionsMode = Literal["auto", "always", "never"]
+
+
+def validate_local_only_model_config(
+    configured: "ConfiguredModelSettings", *, lane: str
+) -> None:
+    """Reject any non-local model route for a local-only reasoning deployment."""
+    if configured.transport != "ollama":
+        raise ValueError(f"{lane} local-only policy requires transport='ollama'")
+    if configured.fallback is not None:
+        raise ValueError(f"{lane} local-only policy forbids fallback models")
+    if (
+        configured.overrides.api_key is not None
+        or configured.overrides.api_key_env is not None
+    ):
+        raise ValueError(f"{lane} local-only policy forbids model API credentials")
+
+    local_ollama_url(configured.overrides.base_url)
+
 
 # OpenAI-compatible models that reject the `dimensions=` request parameter.
 _EMBEDDING_KNOWN_REJECTING_MODELS: frozenset[str] = frozenset(
@@ -33,6 +53,8 @@ _EMBEDDING_KNOWN_REJECTING_MODELS: frozenset[str] = frozenset(
 
 
 def _default_embedding_model_for_transport(transport: EmbeddingTransport) -> str:
+    if transport == "ollama":
+        return "nomic-embed-text"
     if transport == "gemini":
         return "gemini-embedding-001"
     return "text-embedding-3-small"
@@ -318,7 +340,7 @@ class ConfiguredEmbeddingModelSettings(BaseModel):
             and transport_value is None
         ):
             prefix, bare_model = model_value.split("/", 1)
-            if prefix in {"openai", "gemini"}:
+            if prefix in {"openai", "gemini", "ollama"}:
                 update["transport"] = prefix
                 update["model"] = bare_model
         return update
@@ -354,7 +376,7 @@ class EmbeddingModelConfig(BaseModel):
             and transport_value is None
         ):
             prefix, bare_model = model_value.split("/", 1)
-            if prefix in {"openai", "gemini"}:
+            if prefix in {"openai", "gemini", "ollama"}:
                 update["transport"] = prefix
                 update["model"] = bare_model
         return update
@@ -440,6 +462,7 @@ def _default_embedding_api_key(transport: EmbeddingTransport) -> str | None:
         return settings.LLM.OPENAI_API_KEY
     if transport == "gemini":
         return settings.LLM.GEMINI_API_KEY
+    return None
 
 
 def resolve_embedding_model_config(
@@ -745,6 +768,9 @@ class DeriverSettings(HonchoSettings):
     )
 
     ENABLED: bool = True
+    # Compose sets this true for the firm-local reasoning profile so a remote
+    # primary or fallback fails before the deriver can poll any queue.
+    LOCAL_ONLY: bool = False
 
     WORKERS: Annotated[int, Field(default=1, gt=0, le=100)] = 1
     POLLING_SLEEP_INTERVAL_SECONDS: Annotated[
@@ -838,6 +864,8 @@ class DeriverSettings(HonchoSettings):
             raise ValueError(
                 f"REPRESENTATION_BATCH_MAX_TOKENS ({self.REPRESENTATION_BATCH_MAX_TOKENS}) cannot exceed max deriver input tokens ({self.MAX_INPUT_TOKENS})"
             )
+        if self.LOCAL_ONLY:
+            validate_local_only_model_config(self.MODEL_CONFIG, lane="DERIVER")
         return self
 
 
@@ -962,6 +990,9 @@ class DialecticSettings(HonchoSettings):
     LEVELS: dict[ReasoningLevel, DialecticLevelSettings] = Field(
         default_factory=_default_dialectic_levels
     )
+    # The API hosts dialectic synchronously, so it needs its own local-only
+    # guard independent of the deriver worker profile.
+    LOCAL_ONLY: bool = False
 
     MAX_OUTPUT_TOKENS: Annotated[int, Field(default=8192, gt=0, le=100_000)] = 8192
     MAX_INPUT_TOKENS: Annotated[int, Field(default=100_000, gt=0, le=200_000)] = 100_000
@@ -1091,6 +1122,16 @@ class DialecticSettings(HonchoSettings):
         missing = set(REASONING_LEVELS) - set(self.LEVELS.keys())
         if missing:
             raise ValueError(f"Missing configuration for reasoning levels: {missing}")
+        if self.LOCAL_ONLY:
+            for level, level_settings in self.LEVELS.items():
+                validate_local_only_model_config(
+                    level_settings.MODEL_CONFIG, lane=f"DIALECTIC.{level}"
+                )
+                if level_settings.SYNTHESIS_MODEL_CONFIG is not None:
+                    validate_local_only_model_config(
+                        level_settings.SYNTHESIS_MODEL_CONFIG,
+                        lane=f"DIALECTIC.{level}.SYNTHESIS",
+                    )
         return self
 
 

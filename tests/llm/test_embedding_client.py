@@ -1,6 +1,7 @@
 from types import SimpleNamespace
 from typing import Any
 
+import httpx
 import pytest
 
 from src.config import EmbeddingModelConfig
@@ -257,6 +258,59 @@ async def test_openai_batch_embed_forwards_dimensions(
 
     assert len(fake.calls) == 1
     assert fake.calls[0]["dimensions"] == 768
+
+
+@pytest.mark.asyncio
+async def test_ollama_embedding_client_uses_local_embed_endpoint(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[dict[str, Any]] = []
+
+    class FakeOllamaClient:
+        def __init__(
+            self,
+            *,
+            base_url: str,
+            timeout: float,
+            trust_env: bool,
+            follow_redirects: bool,
+        ) -> None:
+            assert trust_env is False and follow_redirects is False
+            self.base_url = base_url
+            self.timeout = timeout
+
+        async def post(self, path: str, *, json: dict[str, Any]) -> httpx.Response:
+            calls.append({"path": path, "json": json})
+            request = httpx.Request("POST", f"{self.base_url}{path}")
+            return httpx.Response(
+                200,
+                request=request,
+                json={"embeddings": [[0.3] * 768 for _ in json["input"]]},
+            )
+
+    monkeypatch.setattr("src.embedding_client.httpx.AsyncClient", FakeOllamaClient)
+
+    client = _EmbeddingClient(
+        EmbeddingModelConfig(
+            transport="ollama",
+            model="nomic-embed-text",
+            base_url="http://127.0.0.1:11434",
+        ),
+        vector_dimensions=768,
+        max_input_tokens=8192,
+        max_tokens_per_request=300_000,
+        send_dimensions=False,
+    )
+
+    embeddings = await client.simple_batch_embed(["a", "b"])
+
+    assert embeddings == [[0.3] * 768, [0.3] * 768]
+    assert calls == [
+        {
+            "path": "/api/embed",
+            "json": {"model": "nomic-embed-text", "input": ["a", "b"]},
+        }
+    ]
 
 
 def _build_embedding_settings(

@@ -6,12 +6,14 @@ from collections import defaultdict
 from collections.abc import Awaitable, Callable
 from typing import Any, Literal, NamedTuple, TypeVar
 
+import httpx
 import tiktoken
 from google import genai
 from google.genai import types as genai_types
 from openai import AsyncOpenAI
 
 from .config import EmbeddingModelConfig, resolve_embedding_model_config, settings
+from .local_transport import local_ollama_url
 
 logger = logging.getLogger(__name__)
 
@@ -161,7 +163,7 @@ class _EmbeddingClient:
                 if config.base_url
                 else None
             )
-            self.client: genai.Client | AsyncOpenAI = genai.Client(
+            self.client: genai.Client | AsyncOpenAI | httpx.AsyncClient = genai.Client(
                 api_key=config.api_key,
                 http_options=http_options,
             )
@@ -169,6 +171,17 @@ class _EmbeddingClient:
             self.max_embedding_tokens: int = min(max_input_tokens, 2048)
             # Gemini batch size is not documented, using conservative estimate
             self.max_batch_size: int = 100
+        elif self.transport == "ollama":
+            if config.api_key is not None:
+                raise ValueError("Ollama embedding transport forbids API credentials")
+            self.client = httpx.AsyncClient(
+                base_url=local_ollama_url(config.base_url),
+                timeout=120.0,
+                trust_env=False,
+                follow_redirects=False,
+            )
+            self.max_embedding_tokens = max_input_tokens
+            self.max_batch_size = 64
         else:  # openai
             if not config.api_key:
                 raise ValueError("OpenAI API key is required")
@@ -229,6 +242,29 @@ class _EmbeddingClient:
                 texts=[query],
                 input_tokens_estimate=token_count,
                 fn=_call_gemini,
+            )
+
+        if isinstance(self.client, httpx.AsyncClient):
+            ollama_client = self.client
+
+            async def _call_ollama() -> list[float]:
+                response = await ollama_client.post(
+                    "/api/embed",
+                    json={"model": self.model, "input": query},
+                )
+                response.raise_for_status()
+                payload = response.json()
+                embeddings = payload.get("embeddings")
+                if not embeddings:
+                    raise ValueError("No embedding returned from Ollama API")
+                return self._validate_embedding_dimensions(embeddings[0])
+
+            return await _emit_embedding_call(
+                provider=self.transport,
+                model=self.model,
+                texts=[query],
+                input_tokens_estimate=token_count,
+                fn=_call_ollama,
             )
 
         openai_client = self.client
@@ -433,6 +469,23 @@ class _EmbeddingClient:
                             result[item.text_id][item.chunk_index] = (
                                 self._validate_embedding_dimensions(embedding.values)
                             )
+            elif isinstance(self.client, httpx.AsyncClient):
+                response = await self.client.post(
+                    "/api/embed",
+                    json={
+                        "model": self.model,
+                        "input": [item.text for item in batch],
+                    },
+                )
+                response.raise_for_status()
+                payload = response.json()
+                embeddings = payload.get("embeddings")
+                if not embeddings:
+                    raise ValueError("No embeddings returned from Ollama API")
+                for item, embedding in zip(batch, embeddings, strict=True):
+                    result[item.text_id][item.chunk_index] = (
+                        self._validate_embedding_dimensions(embedding)
+                    )
             else:  # openai
                 openai_kwargs: dict[str, Any] = {
                     "model": self.model,
