@@ -36,7 +36,9 @@ from .types import ProviderClient
 
 
 def _local_ollama_v1_url(base_url: str | None) -> str:
-    return local_ollama_url(base_url, openai=True)
+    return local_ollama_url(
+        settings.LLM.OLLAMA_BASE_URL if base_url is None else base_url, openai=True
+    )
 
 
 @lru_cache(maxsize=32)
@@ -147,7 +149,9 @@ def client_for_model_config(
     override factories.
     """
     if (
-        settings.DERIVER.LOCAL_ONLY or settings.DIALECTIC.LOCAL_ONLY
+        settings.LLM.LOCAL_ONLY
+        or settings.DERIVER.LOCAL_ONLY
+        or settings.DIALECTIC.LOCAL_ONLY
     ) and provider != "ollama":
         raise ValidationException("Local-only reasoning requires Ollama transport")
     if provider == "ollama":
@@ -163,7 +167,11 @@ def client_for_model_config(
         # Validate before the test-mockable client seam, including fallback policy.
         if model_config.base_url is None and "ollama" in CLIENTS:
             return CLIENTS["ollama"]
-        return get_ollama_client(model_config.base_url)
+        return get_ollama_client(
+            settings.LLM.OLLAMA_BASE_URL
+            if model_config.base_url is None
+            else model_config.base_url
+        )
     if model_config.api_key is None and model_config.base_url is None:
         existing_client = CLIENTS.get(provider)
         if existing_client is not None:
@@ -189,7 +197,9 @@ def backend_for_provider(
 ) -> ProviderBackend:
     """Wrap a raw provider SDK client in the matching ProviderBackend adapter."""
     if (
-        settings.DERIVER.LOCAL_ONLY or settings.DIALECTIC.LOCAL_ONLY
+        settings.LLM.LOCAL_ONLY
+        or settings.DERIVER.LOCAL_ONLY
+        or settings.DIALECTIC.LOCAL_ONLY
     ) and provider != "ollama":
         raise ValidationException("Local-only reasoning requires Ollama transport")
     if provider == "ollama" and isinstance(client, AsyncOpenAI):

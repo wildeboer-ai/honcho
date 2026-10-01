@@ -43,6 +43,7 @@ def update_current_langfuse_observation(
     """Best-effort annotation of the current Langfuse span with LLM routing."""
     if (
         not settings.LANGFUSE_PUBLIC_KEY
+        or settings.LLM.LOCAL_ONLY
         or settings.DERIVER.LOCAL_ONLY
         or settings.DIALECTIC.LOCAL_ONLY
     ):

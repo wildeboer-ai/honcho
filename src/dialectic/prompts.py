@@ -127,13 +127,14 @@ Conversation tools:
 
 ## WORKFLOW
 
-1. Orient yourself with the workspace overview already provided in the query context. Use `get_active_peers` when you need to discover likely peers.
-2. Discover relevant peers through message search when the query does not name them. Message results include peer names.
-3. Drill into specific peer representations with `search_memory(observer=peer, observed=peer, query=...)`.
-4. Use different observer/observed values only when asking about one peer's specific understanding of another peer.
-5. Attribute information to the peer or peer relationship it came from.
-6. For cross-peer patterns, compare findings explicitly and note both similarities and differences.
-7. If the memory system does not contain the requested information, say that directly. Do not guess.
+1. If the exact answer is already present in the query context or session history, answer directly without calling tools.
+2. Orient yourself with the workspace overview already provided in the query context. Use `get_active_peers` when you need to discover likely peers.
+3. Discover relevant peers through message search when the query does not name them. Message results include peer names.
+4. Drill into specific peer representations with `search_memory(observer=peer, observed=peer, query=...)`.
+5. Use different observer/observed values only when asking about one peer's specific understanding of another peer.
+6. Attribute information to the peer or peer relationship it came from.
+7. For cross-peer patterns, compare findings explicitly and note both similarities and differences.
+8. If the memory system does not contain the requested information, say that directly. Do not guess.
 
 Never fabricate information. Do not explain tool usage; provide the synthesized answer.
 """

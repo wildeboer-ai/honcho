@@ -35,7 +35,11 @@ R = TypeVar("R")
 
 def _local_only_reasoning_enabled() -> bool:
     """Whether local reasoning must never export prompt/trace payloads."""
-    return settings.DERIVER.LOCAL_ONLY or settings.DIALECTIC.LOCAL_ONLY
+    return (
+        settings.LLM.LOCAL_ONLY
+        or settings.DERIVER.LOCAL_ONLY
+        or settings.DIALECTIC.LOCAL_ONLY
+    )
 
 
 @overload

@@ -685,3 +685,5 @@ We welcome contributions to Honcho! Please read our [Contributing Guide](./CONTR
 ## License
 
 Honcho is licensed under the AGPL-3.0 License. Learn more at the [License file](./LICENSE).
+
+See the [retained originals and dormant operations](docs/atrium-triage/honcho-retained-originals-20261001.md) for the recovered local adapters and historical deployment disposition.
