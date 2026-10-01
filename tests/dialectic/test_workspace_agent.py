@@ -23,6 +23,7 @@ def test_workspace_agent_uses_workspace_prompt_tools_and_telemetry() -> None:
     )
 
     assert "workspace-level analysis agent" in agent.messages[0]["content"]
+    assert "answer directly without calling tools" in agent.messages[0]["content"]
     assert _tool_names(agent._get_tools()) == [
         "get_workspace_stats",
         "get_active_peers",
@@ -39,7 +40,9 @@ def test_workspace_agent_uses_workspace_prompt_tools_and_telemetry() -> None:
 
 
 @pytest.mark.asyncio
-async def test_workspace_tool_executor_rejects_search_memory_without_peer_pair() -> None:
+async def test_workspace_tool_executor_rejects_search_memory_without_peer_pair() -> (
+    None
+):
     executor = await create_workspace_tool_executor(workspace_name="workspace-1")
 
     result = await executor("search_memory", {"query": "budget"})
@@ -134,9 +137,7 @@ async def test_workspace_chat_stream_releases_preflight_session_before_stream(
         assert active_sessions == 1
         return object()
 
-    async def fake_answer_stream(
-        _self: object, query: str
-    ) -> AsyncIterator[str]:
+    async def fake_answer_stream(_self: object, query: str) -> AsyncIterator[str]:
         assert query == "Stream it"
         assert active_sessions == 0
         yield "chunk-1"

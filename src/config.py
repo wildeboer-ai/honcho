@@ -117,7 +117,7 @@ def _normalize_model_transport(data: Any) -> Any:
     transport_value = update.get("transport")
     if isinstance(model_value, str) and "/" in model_value and transport_value is None:
         prefix, bare_model = model_value.split("/", 1)
-        if prefix in {"anthropic", "openai", "gemini"}:
+        if prefix in {"anthropic", "openai", "gemini", "ollama"}:
             update["transport"] = prefix
             update["model"] = bare_model
     return update
@@ -693,6 +693,8 @@ class LLMSettings(HonchoSettings):
     ANTHROPIC_BASE_URL: str | None = None
     OPENAI_BASE_URL: str | None = None
     GEMINI_BASE_URL: str | None = None
+    OLLAMA_BASE_URL: str = "http://127.0.0.1:11434"
+    LOCAL_ONLY: bool = False
 
     # General LLM settings
     DEFAULT_MAX_TOKENS: Annotated[int, Field(default=1000, gt=0, le=100_000)] = 2500

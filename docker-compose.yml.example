@@ -41,6 +41,11 @@ services:
       - DB_CONNECTION_URI=postgresql+psycopg://postgres:${HONCHO_POSTGRES_PASSWORD:?set HONCHO_POSTGRES_PASSWORD in .env}@database:5432/postgres
       - CACHE_URL=redis://redis:6379/0?suppress=true
       - CACHE_ENABLED=true
+      # Summary is also subject to local-only routing. Select its installed model explicitly.
+      - LLM_LOCAL_ONLY=true
+      - SUMMARY_MODEL_CONFIG__TRANSPORT=ollama
+      - SUMMARY_MODEL_CONFIG__MODEL=${HONCHO_LOCAL_SUMMARY_MODEL:?set HONCHO_LOCAL_SUMMARY_MODEL in .env}
+      - SUMMARY_MODEL_CONFIG__OVERRIDES__BASE_URL=http://host.docker.internal:11434
       - EMBEDDING_VECTOR_DIMENSIONS=768
       - EMBEDDING_MODEL_CONFIG__TRANSPORT=ollama
       - EMBEDDING_MODEL_CONFIG__MODEL=nomic-embed-text
@@ -97,6 +102,11 @@ services:
       - DB_CONNECTION_URI=postgresql+psycopg://postgres:${HONCHO_POSTGRES_PASSWORD:?set HONCHO_POSTGRES_PASSWORD in .env}@database:5432/postgres
       - CACHE_URL=redis://redis:6379/0?suppress=true
       - CACHE_ENABLED=true
+      # Summary is also subject to local-only routing. Select its installed model explicitly.
+      - LLM_LOCAL_ONLY=true
+      - SUMMARY_MODEL_CONFIG__TRANSPORT=ollama
+      - SUMMARY_MODEL_CONFIG__MODEL=${HONCHO_LOCAL_SUMMARY_MODEL:?set HONCHO_LOCAL_SUMMARY_MODEL in .env}
+      - SUMMARY_MODEL_CONFIG__OVERRIDES__BASE_URL=http://host.docker.internal:11434
       - EMBEDDING_VECTOR_DIMENSIONS=768
       - EMBEDDING_MODEL_CONFIG__TRANSPORT=ollama
       - EMBEDDING_MODEL_CONFIG__MODEL=nomic-embed-text
